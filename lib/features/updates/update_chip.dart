@@ -63,7 +63,7 @@ class AppUpdateChip extends StatelessWidget {
         return UpdatePill(
           icon: Icons.check_circle_rounded,
           label: '重启',
-          tooltip: '退出 Logdeck 并打开已下载的安装程序',
+          tooltip: '退出 Logbay 并打开已下载的安装程序',
           onTap: latestVersion == null
               ? null
               : () => _confirmQuitAndInstall(context, latestVersion),
@@ -84,9 +84,9 @@ class AppUpdateChip extends StatelessWidget {
     final shouldInstall = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('退出 Logdeck 以安装更新？'),
+        title: const Text('退出 Logbay 以安装更新？'),
         content: Text(
-          'Logdeck 将退出，然后打开已下载的 v$latestVersion 安装程序。'
+          'Logbay 将退出，然后打开已下载的 v$latestVersion 安装程序。'
           '继续前请保存未完成的工作。',
         ),
         actions: [

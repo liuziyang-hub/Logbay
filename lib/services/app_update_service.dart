@@ -15,7 +15,7 @@ import 'package:path_provider/path_provider.dart';
 class AppUpdateService {
   const AppUpdateService._();
 
-  /// Auto-update is disabled for the Logdeck fork (no public release channel).
+  /// Auto-update is disabled for the Logbay fork (no public release channel).
   static bool get isSupported => false;
 
   static const _latestReleaseApi =
@@ -64,7 +64,7 @@ class AppUpdateService {
   /// The stable download location shared with `updat`.
   ///
   /// Keeping the location under our control lets us launch the installer only
-  /// after this process has quit, rather than opening it while Logdeck still has
+  /// after this process has quit, rather than opening it while Logbay still has
   /// its application bundle in use.
   static Future<File> getDownloadFileLocation(String? version) async {
     final downloadsDirectory = await getDownloadsDirectory();
@@ -77,7 +77,7 @@ class AppUpdateService {
     );
   }
 
-  /// Schedules the downloaded installer to open after Logdeck has exited, then
+  /// Schedules the downloaded installer to open after Logbay has exited, then
   /// terminates this process. This prevents a macOS DMG from asking the user to
   /// replace an app bundle that is still running.
   static Future<void> quitAndOpenInstaller(String version) async {

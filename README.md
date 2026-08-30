@@ -1,6 +1,6 @@
-# Logdeck
+# Logbay
 
-Logdeck 是面向 Windows 的桌面设备工作台，帮你同时管理 Android 与 iOS 设备：实时日志、屏幕镜像、文件传输与应用安装。
+Logbay 是面向 Windows 的桌面设备工作台，帮你同时管理 Android 与 iOS 设备：实时日志、屏幕镜像、文件传输与应用安装。
 
 ## 功能
 

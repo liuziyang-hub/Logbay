@@ -901,7 +901,7 @@ class LogController extends FeatureController {
 
     return LogEntryUtils.buildLoggingState(
       type: type,
-      tag: tag ?? 'Logdeck 会话',
+      tag: tag ?? 'Logbay 会话',
       message: effectiveMessage,
       packageName: device.id,
       processName: subject,

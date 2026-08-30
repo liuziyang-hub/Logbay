@@ -28,7 +28,7 @@ class _GitHubStarButtonState extends State<GitHubStarButton> {
         : theme.colorScheme.onSurfaceVariant;
 
     return Tooltip(
-      message: 'Logdeck on GitHub',
+      message: 'Logbay on GitHub',
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
         onEnter: (_) => setState(() => _hovered = true),

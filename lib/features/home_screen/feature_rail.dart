@@ -63,26 +63,6 @@ class FeatureRail extends StatelessWidget {
                           spacing: 4,
                           children: [
                             RailButton(
-                              icon: Icons.info_outline,
-                              label: '详情',
-                              isActive: session.isDeviceInfoOpen,
-                              enabled:
-                                  session.canShowDeviceInfo ||
-                                  session.isDeviceInfoOpen,
-                              tooltip:
-                                  session.canShowDeviceInfo ||
-                                      session.isDeviceInfoOpen
-                                  ? (session.isDeviceInfoOpen
-                                        ? '隐藏设备详情'
-                                        : '查看设备详情')
-                                  : '请先连接设备后再查看详情',
-                              onTap:
-                                  session.canShowDeviceInfo ||
-                                      session.isDeviceInfoOpen
-                                  ? session.toggleDeviceInfo
-                                  : null,
-                            ),
-                            RailButton(
                               icon: Icons.article_outlined,
                               label: '日志',
                               isActive: session.isLogsOpen,

@@ -73,13 +73,13 @@ const List<Tip> kTips = [
     actionHint: '在设备侧栏中选择「屏幕镜像」功能',
   ),
   Tip(
-    id: 'device-info',
-    icon: Icons.info_outline,
-    title: '查看设备详情',
+    id: 'device-home',
+    icon: Icons.home_outlined,
+    title: '设备主页概览',
     detail:
-        '侧栏「详情」可查看身份、系统、电池、存储等完整字段，点击即可复制；'
-        '设备主页另有实时 CPU / 内存 / 电池等概览。',
-    actionHint: '在设备侧栏中选择「详情」',
+        '主页可查看身份、系统、电池、存储、连接状态等完整信息，'
+        '以及实时 CPU / 内存 / 电池等仪表；字段支持复制。',
+    actionHint: '在设备侧栏中选择「主页」',
   ),
   Tip(
     id: 'adb-shell',

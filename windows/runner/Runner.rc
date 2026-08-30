@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "Logdeck" "\0"
-            VALUE "FileDescription", "Logdeck" "\0"
+            VALUE "CompanyName", "Logbay" "\0"
+            VALUE "FileDescription", "Logbay" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "logdeck" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 Logdeck. All rights reserved." "\0"
+            VALUE "InternalName", "logbay" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Logbay. All rights reserved." "\0"
             VALUE "OriginalFilename", "eagly.exe" "\0"
-            VALUE "ProductName", "Logdeck" "\0"
+            VALUE "ProductName", "Logbay" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

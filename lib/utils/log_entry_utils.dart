@@ -9,7 +9,7 @@ final class LogEntryUtils {
     required LogEntryType type,
     required String message,
     String? timestamp,
-    String tag = 'Logdeck',
+    String tag = 'Logbay',
     String level = 'I',
     String pid = '',
     String tid = '',
@@ -33,7 +33,7 @@ final class LogEntryUtils {
   static LogEntry buildLoggingState({
     required LogEntryType type,
     String? message,
-    String tag = 'Logdeck',
+    String tag = 'Logbay',
     String? packageName,
     String? processName,
     String? timestamp,

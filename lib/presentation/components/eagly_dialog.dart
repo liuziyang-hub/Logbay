@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:gap/gap.dart';
 
-/// Standard dialog shell for Logdeck's desktop UI.
+/// Standard dialog shell for Logbay's desktop UI.
 ///
 /// Provides a consistent header (optional leading icon, title, optional
 /// header actions and a close button on the top right), a divider and a

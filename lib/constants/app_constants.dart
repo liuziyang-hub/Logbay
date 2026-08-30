@@ -1,6 +1,6 @@
 class AppConstants {
   /// Product name shown in window title, About, settings, menus, etc.
-  static const appName = 'Logdeck';
+  static const appName = 'Logbay';
 
   /// Landing-page hero brand only (keep as-is on the home lake screen).
   static const landingBrandName = '刘子阳';

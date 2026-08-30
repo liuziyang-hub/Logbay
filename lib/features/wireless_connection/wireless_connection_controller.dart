@@ -385,7 +385,7 @@ class WirelessConnectionController extends ChangeNotifier {
     }
   }
 
-  String _generateQrServiceName() => 'logdeck-${_randomAlphaNumeric(10)}';
+  String _generateQrServiceName() => 'logbay-${_randomAlphaNumeric(10)}';
 
   String _generateQrPassword() => _randomAlphaNumeric(12);
 

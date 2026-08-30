@@ -1,11 +1,11 @@
-app_id: com.gyanoba.logdeck
-display_name: Logdeck
+app_id: com.gyanoba.logbay
+display_name: Logbay
 executable_name: eagly.exe
-publisher_name: Logdeck
+publisher_name: Logbay
 publisher_url: https://github.com/ShreyashKore/eagly
 create_desktop_icon: true
 launch_at_startup: false
-install_dir_name: '{autopf64}\\Logdeck'
+install_dir_name: '{autopf64}\\Logbay'
 setup_icon_file: windows/runner/resources/app_icon.ico
 locales:
   - en

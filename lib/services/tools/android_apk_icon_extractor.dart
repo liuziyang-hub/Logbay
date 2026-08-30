@@ -5,7 +5,7 @@ import 'package:archive/archive.dart';
 import 'package:collection/collection.dart';
 
 /// Best-effort launcher icon extraction from an Android APK, entirely in
-/// Dart — Logdeck bundles bare `adb`, not `aapt`/`aapt2`, so there is no
+/// Dart — Logbay bundles bare `adb`, not `aapt`/`aapt2`, so there is no
 /// off-the-shelf tool to ask for a decoded icon. This parses the binary
 /// AndroidManifest.xml ("AXML") to find the `android:icon` resource
 /// reference on `<application>`, then resolves it through resources.arsc
