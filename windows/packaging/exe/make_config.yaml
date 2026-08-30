@@ -1,8 +1,8 @@
-app_id: com.gyanoba.logbay
+app_id: com.logbay.app
 display_name: Logbay
 executable_name: eagly.exe
 publisher_name: Logbay
-publisher_url: https://github.com/ShreyashKore/eagly
+publisher_url: https://github.com/liuziyang-hub/Logbay
 create_desktop_icon: true
 launch_at_startup: false
 install_dir_name: '{autopf64}\\Logbay'

@@ -28,7 +28,7 @@ class _GitHubStarButtonState extends State<GitHubStarButton> {
         : theme.colorScheme.onSurfaceVariant;
 
     return Tooltip(
-      message: 'Logbay on GitHub',
+      message: '在 GitHub 打开 Logbay',
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
         onEnter: (_) => setState(() => _hovered = true),

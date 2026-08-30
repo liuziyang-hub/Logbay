@@ -7,10 +7,10 @@ class AppConstants {
 
   static const appDescription =
       '桌面日志与设备工作台：支持 Android / iOS 日志、镜像、文件与应用管理。';
-  /// Local fork — no upstream release feed / auto-update.
-  static const repoOwner = '';
-  static const repoName = '';
-  static const repoUrl = '';
+  /// Public GitHub repository (header GitHub button).
+  static const repoOwner = 'liuziyang-hub';
+  static const repoName = 'Logbay';
+  static const repoUrl = 'https://github.com/liuziyang-hub/Logbay';
 
   /// Identifier + label for the synthetic device-less "Imported Logs" workspace
   /// session that hosts log files opened without a connected device.
