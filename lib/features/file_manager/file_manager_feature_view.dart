@@ -1,0 +1,304 @@
+import 'package:flutter/material.dart';
+
+import '../../presentation/components/centered_state_message.dart';
+import '../../presentation/components/feature_view.dart';
+import 'components/file_breadcrumb_bar.dart';
+import 'components/file_context_menu.dart';
+import 'components/file_grid_view.dart';
+import 'components/file_list_view.dart';
+import 'components/file_manager_toolbar.dart';
+import 'data/device_file_entry.dart';
+import 'file_manager_controller.dart';
+
+/// File-manager feature pane. Composes the toolbar, breadcrumb, the active
+/// list/grid view (with empty/error/loading states), a busy overlay for
+/// transfers, and a status bar. Owns the dialogs and snackbars for the file
+/// actions. [onClose] hides the pane (handled by the device screen).
+class FileManagerFeatureView extends FeatureView {
+  const FileManagerFeatureView({
+    super.key,
+    required this.controller,
+    required VoidCallback onClose,
+  }) : super(onClose: onClose);
+
+  final FileManagerController controller;
+
+  @override
+  State<FileManagerFeatureView> createState() => _FileManagerFeatureViewState();
+}
+
+class _FileManagerFeatureViewState
+    extends FeatureViewState<FileManagerFeatureView> {
+  FileManagerController get controller => widget.controller;
+
+  @override
+  Listenable get listenable => controller;
+
+  void _showSnackBar(String? message) {
+    if (message == null) return;
+    showSnackBar(message);
+  }
+
+  late final FileManagerActions _actions = FileManagerActions(
+    onDownload: _handleDownload,
+    onRename: _handleRename,
+    onDelete: _handleDelete,
+    onUpload: _handleUpload,
+    onNewFolder: _handleNewFolder,
+  );
+
+  Future<void> _handleUpload() async {
+    _showSnackBar(await controller.uploadFiles());
+  }
+
+  Future<void> _handleDownload([DeviceFileEntry? entry]) async {
+    final target = entry ?? controller.selectedEntry;
+    if (target == null) return;
+    _showSnackBar(await controller.downloadEntry(target));
+  }
+
+  Future<void> _handleNewFolder() async {
+    final name = await _promptForName(
+      title: '新建文件夹',
+      label: '文件夹名称',
+      hint: '未命名文件夹',
+      confirmLabel: '创建',
+    );
+    if (name == null) return;
+    _showSnackBar(await controller.createDirectory(name));
+  }
+
+  Future<void> _handleRename(DeviceFileEntry entry) async {
+    final name = await _promptForName(
+      title: '重命名 ${entry.name}',
+      label: '新名称',
+      initialValue: entry.name,
+      confirmLabel: '重命名',
+    );
+    if (name == null || name == entry.name) return;
+    _showSnackBar(await controller.renameEntry(entry, name));
+  }
+
+  Future<void> _handleDelete([DeviceFileEntry? entry]) async {
+    final target = entry ?? controller.selectedEntry;
+    if (target == null) return;
+    final confirmed = await _confirmDelete(target);
+    if (!confirmed) return;
+    _showSnackBar(await controller.deleteEntry(target));
+  }
+
+  Future<String?> _promptForName({
+    required String title,
+    required String label,
+    required String confirmLabel,
+    String? hint,
+    String? initialValue,
+  }) async {
+    final fieldController = TextEditingController(text: initialValue);
+    if (initialValue != null) {
+      fieldController.selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: initialValue.length,
+      );
+    }
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: TextField(
+          controller: fieldController,
+          autofocus: true,
+          decoration: InputDecoration(labelText: label, hintText: hint),
+          onSubmitted: (value) => Navigator.of(context).pop(value.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.of(context).pop(fieldController.text.trim()),
+            child: Text(confirmLabel),
+          ),
+        ],
+      ),
+    );
+    fieldController.dispose();
+    return (name == null || name.isEmpty) ? null : name;
+  }
+
+  Future<bool> _confirmDelete(DeviceFileEntry entry) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('删除 ${entry.name}？'),
+        content: Text(
+          entry.isDirectory
+              ? '这将永久删除该文件夹及其所有内容。'
+              : '这将永久删除该文件。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+            ),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    return confirmed ?? false;
+  }
+
+  @override
+  Widget buildContent(BuildContext context) {
+    return FeaturePane(
+      header: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          FileManagerToolbar(
+            controller: controller,
+            onUpload: _handleUpload,
+            onNewFolder: _handleNewFolder,
+            onDownloadSelected: _handleDownload,
+            onDeleteSelected: _handleDelete,
+            onClose: widget.onClose,
+          ),
+          FileBreadcrumbBar(controller: controller),
+        ],
+      ),
+      body: Stack(
+        children: [
+          Positioned.fill(child: _buildBody(context)),
+          if (controller.isBusy) _buildBusyOverlay(context),
+        ],
+      ),
+      statusBar: _buildStatusBar(context),
+    );
+  }
+
+  Widget _buildBody(BuildContext context) {
+    switch (controller.loadState) {
+      case FileLoadState.idle:
+        return const SizedBox.shrink();
+      case FileLoadState.loading:
+        if (controller.entryCount == 0) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        return _buildViewer();
+      case FileLoadState.error:
+        return CenteredStateMessage(
+          icon: Icons.folder_off_outlined,
+          title: '无法打开此文件夹',
+          description: controller.error ?? '出现错误。',
+          footer: FilledButton.icon(
+            onPressed: controller.refresh,
+            icon: const Icon(Icons.refresh),
+            label: const Text('重试'),
+          ),
+        );
+      case FileLoadState.ready:
+        if (controller.entryCount == 0) {
+          return const CenteredStateMessage(
+            icon: Icons.folder_open_outlined,
+            title: '空文件夹',
+            description: '此处没有文件或文件夹。',
+          );
+        }
+        return _buildViewer();
+    }
+  }
+
+  Widget _buildViewer() {
+    final viewer = switch (controller.viewMode) {
+      FileManagerViewMode.list => FileListView(
+        controller: controller,
+        actions: _actions,
+      ),
+      FileManagerViewMode.grid => FileGridView(
+        controller: controller,
+        actions: _actions,
+      ),
+    };
+
+    // Right-click on empty space (rows handle their own secondary tap and, being
+    // deeper, win the gesture arena) opens the current-directory menu.
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onSecondaryTapUp: (details) => showFileAreaMenu(
+        context,
+        details.globalPosition,
+        controller: controller,
+        actions: _actions,
+      ),
+      child: viewer,
+    );
+  }
+
+  Widget _buildBusyOverlay(BuildContext context) {
+    final theme = Theme.of(context);
+    return Positioned.fill(
+      child: ColoredBox(
+        color: theme.colorScheme.surface.withValues(alpha: 0.6),
+        child: Center(
+          child: Material(
+            color: theme.colorScheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(10),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    controller.busyLabel ?? '处理中…',
+                    style: theme.textTheme.bodyMedium,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatusBar(BuildContext context) {
+    final theme = Theme.of(context);
+    final selected = controller.selectedEntry;
+    return FeatureStatusBar(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      children: [
+        Text(
+          '${controller.directoryCount} 个文件夹 · ${controller.fileCount} 个文件',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const Spacer(),
+        if (selected != null)
+          Flexible(
+            child: Text(
+              selected.name,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}

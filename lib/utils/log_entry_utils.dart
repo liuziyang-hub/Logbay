@@ -1,0 +1,156 @@
+import '../features/logs/data/models/log_column.dart';
+import '../features/logs/data/models/log_entry.dart';
+import 'timestamp_utils.dart';
+
+enum LogCopyFormat { messageOnly, timestampAndMessage, fullLine }
+
+final class LogEntryUtils {
+  static LogEntry buildSpecial({
+    required LogEntryType type,
+    required String message,
+    String? timestamp,
+    String tag = 'Logdeck',
+    String level = 'I',
+    String pid = '',
+    String tid = '',
+    String? packageName,
+    String? processName,
+  }) {
+    assert(type != LogEntryType.log, 'Use the default constructor for logs.');
+    return LogEntry(
+      type: type,
+      timestamp: timestamp ?? TimestampUtils.formatDate(DateTime.now()),
+      pid: pid,
+      tid: tid,
+      level: level,
+      tag: tag,
+      message: message.trim(),
+      packageName: packageName,
+      processName: processName,
+    );
+  }
+
+  static LogEntry buildLoggingState({
+    required LogEntryType type,
+    String? message,
+    String tag = 'Logdeck',
+    String? packageName,
+    String? processName,
+    String? timestamp,
+  }) {
+    return buildSpecial(
+      type: type,
+      timestamp: timestamp,
+      tag: tag,
+      level: type == LogEntryType.error ? 'E' : 'I',
+      message: (message == null || message.trim().isEmpty)
+          ? _defaultMessageForType(type)
+          : message.trim(),
+      packageName: packageName,
+      processName: processName,
+    );
+  }
+
+  static LogEntry buildToolError({
+    required String message,
+    required String tag,
+    required String processName,
+  }) {
+    return buildLoggingState(
+      type: LogEntryType.error,
+      tag: tag,
+      message: message,
+      packageName: processName,
+      processName: processName,
+    );
+  }
+
+  static String _defaultMessageForType(LogEntryType type) {
+    return switch (type) {
+      LogEntryType.log => '',
+      LogEntryType.started => '已开始捕获日志。',
+      LogEntryType.resumed => '已恢复实时日志。',
+      LogEntryType.paused => '已暂停实时日志。',
+      LogEntryType.stopped => '已停止捕获日志。',
+      LogEntryType.error => '记录日志时发生错误。',
+      LogEntryType.notice => '日志状态已更新。',
+    };
+  }
+}
+
+extension LogEntryCollectionExt on Iterable<LogEntry> {
+  String formatForCopy(LogCopyFormat format) {
+    return map((entry) => entry.formatForCopy(format)).join('\n');
+  }
+}
+
+extension LogEntryExt on LogEntry {
+  bool get isSpecialEntry => type.isSpecial;
+
+  bool get isActualLog => type == LogEntryType.log;
+
+  bool get isUserSelectable => isActualLog;
+
+  bool get isCopyable => isActualLog;
+
+  String get typeLabel => type.label;
+
+  String get specialSearchableText {
+    return [
+      type.label,
+      timestamp,
+      tag,
+      packageName,
+      processName,
+      message,
+    ].whereType<String>().where((value) => value.trim().isNotEmpty).join(' ');
+  }
+
+  String valueForColumn(
+    LogColumn column, {
+    bool isIos = false,
+  }) => switch (column) {
+    LogColumn.timestamp => timestamp,
+    // iOS: packageName holds the compact process name ("novio", "runningboardd").
+    // Android: packageName is the resolved package name, or PID as fallback.
+    LogColumn.pid => packageName ?? processName ?? pid,
+    // iOS has no thread ID in syslog output (stored as '0'); show PID instead.
+    // Android: combined "PID/TID" so both are visible in one cell.
+    LogColumn.tid => isIos ? pid : '$pid/$tid',
+    LogColumn.level => isSpecialEntry ? typeLabel : level,
+    LogColumn.tag => tag,
+    LogColumn.message => message,
+  };
+
+  String formatForCopy(LogCopyFormat format) {
+    return switch (format) {
+      LogCopyFormat.messageOnly => message,
+      LogCopyFormat.timestampAndMessage => '$timestamp $message',
+      LogCopyFormat.fullLine =>
+        '$timestamp ${packageName ?? pid} $tid $level $tag: $message',
+    };
+  }
+}
+
+int estimateLogsBytes(Iterable<LogEntry> entries) {
+  var total = 0;
+  for (final entry in entries) {
+    total += estimateLogEntryBytes(entry);
+  }
+  return total;
+}
+
+int estimateLogEntryBytes(LogEntry log) {
+  int stringBytes(String value) => value.length * 2;
+
+  return 128 +
+      stringBytes(log.type.name) +
+      stringBytes(log.timestamp) +
+      stringBytes(log.pid) +
+      stringBytes(log.tid) +
+      stringBytes(log.level) +
+      stringBytes(log.tag) +
+      stringBytes(log.message) +
+      stringBytes(log.lowercaseSearchable) +
+      (log.packageName == null ? 0 : stringBytes(log.packageName!));
+}

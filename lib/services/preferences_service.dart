@@ -1,0 +1,260 @@
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../constants/atmosphere_theme.dart';
+import '../features/logs/data/models/log_column.dart';
+import '../features/logs/data/models/log_level.dart';
+import '../features/logs/data/models/log_tab_settings.dart';
+import '../features/logs/presentation/models/log_view_mode.dart';
+
+extension SharedPreferencesJson on SharedPreferences {
+  /// Reads a JSON-encoded value from persistent storage and decodes it.
+  /// Returns `null` if the key doesn't exist or decoding fails.
+  T? getJson<T>(String key, T Function(dynamic json) fromJson) {
+    final raw = getString(key);
+    if (raw == null) return null;
+    return fromJson(jsonDecode(raw));
+  }
+
+  /// JSON-encodes [value] and saves it to persistent storage.
+  Future<bool> setJson(String key, Object value) =>
+      setString(key, jsonEncode(value));
+}
+
+class PreferencesService {
+  static late SharedPreferences _prefs;
+  static final ValueNotifier<ThemeMode> themeModeListenable = ValueNotifier(
+    ThemeMode.dark,
+  );
+  static final ValueNotifier<AtmosphereTheme> atmosphereThemeListenable =
+      ValueNotifier(AtmosphereTheme.lake);
+
+  static Future<void> init() async {
+    _prefs = await SharedPreferences.getInstance();
+    // Three visual themes replace light/dark/auto — keep Material dark.
+    themeMode = ThemeMode.dark;
+    themeModeListenable.value = ThemeMode.dark;
+    atmosphereThemeListenable.value = atmosphereTheme;
+    logFontSizeListenable.value = logFontSize;
+    recentLogFilesListenable.value = recentLogFiles;
+    tipsEnabledListenable.value = tipsEnabled;
+    zoomLevelListenable.value = zoomLevel;
+  }
+
+  // Keys
+  static const _keyWrapText = 'wrapText';
+  static const _keyAutoScroll = 'autoScroll';
+  static const _keySelectedLogLevel = 'selectedLogLevel';
+  static const _keySelectedAndroidLogLevel = 'selectedAndroidLogLevel';
+  static const _keySelectedIosLogLevel = 'selectedIosLogLevel';
+  static const _keyFilterViewMode = 'filterViewMode';
+  static const _keyColumnWidths = 'columnWidths';
+  static const _keyHiddenColumns = 'hiddenColumns';
+  static const _keyLogLinesLimit = 'logLinesLimit';
+  static const _keyThemeMode = 'themeMode';
+  static const _keyAtmosphereTheme = 'atmosphereTheme';
+  static const _keyLastFileDialogDirectory = 'lastFileDialogDirectory';
+  static const _keyLogFontSize = 'logFontSize';
+  static const _keyRecentLogFiles = 'recentLogFiles';
+  static const _keyTipsEnabled = 'tipsEnabled';
+  static const _keyTipRotationIndex = 'tipRotationIndex';
+
+  /// Maximum number of recently opened log files retained for quick re-open.
+  static const _maxRecentLogFiles = 10;
+
+  /// Default value for [logLinesLimit] when no preference has been saved.
+  static const defaultLogLinesLimit = 100000;
+
+  // --- Home page preferences ---
+
+  static bool get wrapText => _prefs.getBool(_keyWrapText) ?? false;
+  static set wrapText(bool v) => _prefs.setBool(_keyWrapText, v);
+
+  static bool get autoScroll => _prefs.getBool(_keyAutoScroll) ?? true;
+  static set autoScroll(bool v) => _prefs.setBool(_keyAutoScroll, v);
+
+  static LogLevel get selectedLogLevel => LogLevel.fromStored(
+    _prefs.getString(_keySelectedLogLevel) ??
+        _prefs.getString(_keySelectedAndroidLogLevel) ??
+        _prefs.getString(_keySelectedIosLogLevel) ??
+        LogLevel.verbose.code,
+  );
+  static set selectedLogLevel(LogLevel v) =>
+      _prefs.setString(_keySelectedLogLevel, v.code);
+
+  static LogFilterViewMode get filterViewMode =>
+      LogFilterViewMode.fromStored(_prefs.getString(_keyFilterViewMode));
+  static set filterViewMode(LogFilterViewMode v) =>
+      _prefs.setString(_keyFilterViewMode, v.name);
+
+  static int get logLinesLimit =>
+      _prefs.getInt(_keyLogLinesLimit) ?? defaultLogLinesLimit;
+  static set logLinesLimit(int v) => _prefs.setInt(_keyLogLinesLimit, v);
+
+  static ThemeMode get themeMode =>
+      _themeModeFromName(_prefs.getString(_keyThemeMode)) ?? ThemeMode.dark;
+
+  static AtmosphereTheme get atmosphereTheme =>
+      AtmosphereThemeX.fromName(_prefs.getString(_keyAtmosphereTheme)) ??
+      AtmosphereTheme.lake;
+
+  static set atmosphereTheme(AtmosphereTheme value) {
+    atmosphereThemeListenable.value = value;
+    _prefs.setString(_keyAtmosphereTheme, value.name);
+    // Visual themes own the full look — always use the dark Material kit.
+    themeMode = ThemeMode.dark;
+  }
+
+  static String? get lastFileDialogDirectory =>
+      _prefs.getString(_keyLastFileDialogDirectory);
+
+  static Future<bool> setLastFileDialogDirectory(String? value) {
+    if (value == null || value.isEmpty) {
+      return _prefs.remove(_keyLastFileDialogDirectory);
+    }
+
+    return _prefs.setString(_keyLastFileDialogDirectory, value);
+  }
+
+  static set themeMode(ThemeMode value) {
+    themeModeListenable.value = value;
+    _prefs.setString(_keyThemeMode, value.name);
+  }
+
+  // --- Feature tips (header panel) ---
+  /// Whether the header feature-tips panel is shown at all. Turning it off is a
+  /// permanent, user-driven choice; re-enable from Settings. Listenable so the
+  /// Settings toggle and the header panel stay in sync.
+  static final ValueNotifier<bool> tipsEnabledListenable = ValueNotifier(true);
+
+  static bool get tipsEnabled => _prefs.getBool(_keyTipsEnabled) ?? true;
+  static set tipsEnabled(bool v) {
+    tipsEnabledListenable.value = v;
+    _prefs.setBool(_keyTipsEnabled, v);
+  }
+
+  /// Monotonic counter used to rotate which tip is shown. Advanced once per app
+  /// launch so a different tip surfaces each time the app is opened.
+  static int get tipRotationIndex => _prefs.getInt(_keyTipRotationIndex) ?? 0;
+  static set tipRotationIndex(int v) => _prefs.setInt(_keyTipRotationIndex, v);
+
+  // --- Recent log files (most-recent first, capped, for one-click re-open) ---
+  /// Listenable so the home screen rebuilds when the list changes.
+  static final ValueNotifier<List<String>> recentLogFilesListenable =
+      ValueNotifier(const []);
+
+  static List<String> get recentLogFiles =>
+      _prefs.getJson<List<String>>(
+        _keyRecentLogFiles,
+        (json) => (json as List<dynamic>).map((e) => e as String).toList(),
+      ) ??
+      const [];
+
+  /// Records [path] as the most-recently opened log file, de-duplicating and
+  /// capping the list at [_maxRecentLogFiles].
+  static Future<void> addRecentLogFile(String path) {
+    final normalized = path.trim();
+    if (normalized.isEmpty) return Future<void>.value();
+
+    final next = [normalized, ...recentLogFiles.where((p) => p != normalized)];
+    if (next.length > _maxRecentLogFiles) {
+      next.removeRange(_maxRecentLogFiles, next.length);
+    }
+    return _setRecentLogFiles(next);
+  }
+
+  static Future<void> removeRecentLogFile(String path) {
+    final next = recentLogFiles.where((p) => p != path).toList();
+    if (next.length == recentLogFiles.length) return Future<void>.value();
+    return _setRecentLogFiles(next);
+  }
+
+  static Future<void> _setRecentLogFiles(List<String> value) {
+    recentLogFilesListenable.value = List.unmodifiable(value);
+    return _prefs.setJson(_keyRecentLogFiles, value);
+  }
+
+  // --- Log font size preference (affects the log viewer text size) ---
+  static final ValueNotifier<double> logFontSizeListenable = ValueNotifier(
+    12.0,
+  );
+
+  static double get logFontSize => _prefs.getDouble(_keyLogFontSize) ?? 12.0;
+  static set logFontSize(double v) {
+    final clamped = (v).clamp(8.0, 24.0);
+    final current = logFontSize;
+    if ((current - clamped).abs() < 0.0001) return;
+    logFontSizeListenable.value = clamped;
+    _prefs.setDouble(_keyLogFontSize, clamped);
+  }
+
+  // --- Zoom level (scales the entire app: fonts, paddings, dimensions) ---
+  static const _keyZoomLevel = 'zoomLevel';
+  static const _defaultZoomLevel = 1.0;
+  static const _zoomMin = 0.7;
+  static const _zoomMax = 1.8;
+
+  static final ValueNotifier<double> zoomLevelListenable = ValueNotifier(
+    _defaultZoomLevel,
+  );
+
+  static double get zoomLevel =>
+      _prefs.getDouble(_keyZoomLevel) ?? _defaultZoomLevel;
+  static set zoomLevel(double v) {
+    final clamped = v.clamp(_zoomMin, _zoomMax);
+    final current = zoomLevel;
+    if ((current - clamped).abs() < 0.0001) return;
+    zoomLevelListenable.value = clamped;
+    _prefs.setDouble(_keyZoomLevel, clamped);
+  }
+
+  static LogTabSettings get defaultTabSettings => LogTabSettings(
+    wrapText: wrapText,
+    autoScroll: autoScroll,
+    selectedLogLevel: selectedLogLevel,
+    filterViewMode: filterViewMode,
+    logLinesLimit: logLinesLimit,
+    hiddenColumns: hiddenColumns,
+    columnWidths: columnWidths,
+  );
+
+  // --- Column widths (stored as single JSON object) ---
+
+  static Map<String, double> get columnWidths {
+    final defaults = {for (final c in LogColumn.values) c.name: c.defaultWidth};
+    return _prefs.getJson<Map<String, double>>(
+          _keyColumnWidths,
+          (json) => (json as Map<String, dynamic>).map(
+            (k, v) => MapEntry(k, (v as num).toDouble()),
+          ),
+        ) ??
+        defaults;
+  }
+
+  static set columnWidths(Map<String, double> v) =>
+      _prefs.setJson(_keyColumnWidths, v);
+
+  // --- Hidden columns (stored as JSON list of column names) ---
+
+  static Set<String> get hiddenColumns {
+    return _prefs.getJson<Set<String>>(
+          _keyHiddenColumns,
+          (json) => (json as List<dynamic>).map((e) => e as String).toSet(),
+        ) ??
+        {};
+  }
+
+  static set hiddenColumns(Set<String> v) =>
+      _prefs.setJson(_keyHiddenColumns, v.toList());
+
+  static ThemeMode? _themeModeFromName(String? value) {
+    return switch (value) {
+      'system' => ThemeMode.system,
+      'light' => ThemeMode.light,
+      'dark' => ThemeMode.dark,
+      _ => null,
+    };
+  }
+}

@@ -1,0 +1,120 @@
+import 'package:eagly/features/logs/data/models/log_column.dart';
+import 'package:eagly/features/logs/data/models/log_entry.dart';
+import 'package:eagly/features/logs/services/log_formats/log_formats.dart';
+import 'package:eagly/features/logs/services/log_parsers/logcat_parser.dart';
+import 'package:eagly/utils/log_entry_utils.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+const _format = AndroidLogcatFormat();
+
+void main() {
+  final parser = LogcatParser();
+  group('LogEntry', () {
+    test('parseFromLogcat assigns a unique incrementing internal ID', () {
+      final first = parser.parse(
+        '04-26 20:54:02.025 1234 5678 I AuthTag: first message',
+      );
+      final second = parser.parse(
+        '04-26 20:54:02.026 1234 5678 I AuthTag: second message',
+      );
+
+      expect(first, isNotNull);
+      expect(second, isNotNull);
+      expect(first!.id, isNonNegative);
+      expect(second!.id, first.id + 1);
+      expect(first.id, isNot(second.id));
+    });
+
+    test('does not export internal IDs and regenerates them on import', () {
+      final entry = LogEntry(
+        timestamp: '2026-04-26 20:54:02.025',
+        pid: '1234',
+        tid: '5678',
+        level: 'I',
+        tag: 'AuthTag',
+        message: 'message body',
+      );
+
+      final exported = _format.export([entry]).content;
+      final restored = _format.parse(exported).logs.firstOrNull;
+
+      expect(exported.contains('"id"'), isFalse);
+      expect(restored, isNotNull);
+      expect(restored!.id, isNot(entry.id));
+      expect(restored.message, entry.message);
+      expect(restored.tag, entry.tag);
+      expect(restored.type, LogEntryType.log);
+    });
+
+    test('uses a provided ID unchanged', () {
+      const customId = 42;
+      final entry = LogEntry(
+        id: customId,
+        timestamp: '2026-04-26 20:54:02.025',
+        pid: '1234',
+        tid: '5678',
+        level: 'I',
+        tag: 'AuthTag',
+        message: 'message body',
+      );
+
+      expect(entry.id, customId);
+    });
+
+    test('PID/TID column combines pid and tid for Android, pid-only for iOS', () {
+      final entry = LogEntry(
+        timestamp: '2026-04-26 20:54:02.025',
+        pid: '1234',
+        tid: '5678',
+        level: 'I',
+        tag: 'AuthTag',
+        message: 'message body',
+      );
+
+      // Android shows both (TID is real); iOS shows only PID (TID is always 0).
+      expect(entry.valueForColumn(LogColumn.tid), '1234/5678');
+      expect(entry.valueForColumn(LogColumn.tid, isIos: true), '1234');
+    });
+
+    test('special state factories create non-selectable entries', () {
+      final paused = LogEntryUtils.buildLoggingState(
+        type: LogEntryType.paused,
+        message: 'Paused live logging for Pixel 8.',
+        processName: 'Pixel 8',
+      );
+
+      expect(paused.isSpecialEntry, isTrue);
+      expect(paused.isUserSelectable, isFalse);
+      expect(paused.isCopyable, isFalse);
+      expect(paused.typeLabel, 'Paused');
+      expect(paused.level, 'I');
+      expect(paused.message, 'Paused live logging for Pixel 8.');
+      expect(paused.specialSearchableText, contains('Paused'));
+    });
+
+    test('parses fatal Android threadtime lines and trims padded tags', () {
+      final entry = parser.parse(
+        '05-14 17:12:59.035  2002 12397 F DEBUG   : Softversion: PD2201IF_EX_A_14.2.14.2.W30.V000L1',
+      );
+
+      expect(entry, isNotNull);
+      expect(entry!.type, LogEntryType.log);
+      expect(entry.level, 'F');
+      expect(entry.tag, 'DEBUG');
+      expect(entry.message, 'Softversion: PD2201IF_EX_A_14.2.14.2.W30.V000L1');
+    });
+
+    test('parses logcat section separators into special notice entries', () {
+      final entry = parser.parse('--------- beginning of crash');
+
+      expect(entry, isNotNull);
+      expect(entry!.type, LogEntryType.notice);
+      expect(entry.isSpecialEntry, isTrue);
+      expect(entry.isUserSelectable, isFalse);
+      expect(entry.tag, 'adb logcat');
+      expect(entry.level, 'I');
+      expect(entry.processName, 'crash');
+      expect(entry.message, 'Beginning of crash');
+    });
+  });
+}

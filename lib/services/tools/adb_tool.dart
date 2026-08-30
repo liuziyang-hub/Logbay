@@ -1,0 +1,1570 @@
+import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:eagly/features/logs/services/log_parsers/logcat_parser.dart';
+
+import '../../data/device.dart';
+import '../../features/apps/data/app_info.dart';
+import '../../features/device_home/data/device_info.dart';
+import '../../features/device_home/data/device_performance_stats.dart';
+import '../../features/device_home/data/installed_app_info.dart';
+import '../../features/device_info/data/device_details.dart';
+import '../../features/logs/data/models/log_entry.dart';
+import '../../features/wireless_connection/data/wireless_debug_models.dart';
+import '../../utils/utils.dart';
+import 'tool_process_runner.dart';
+
+class AdbTool extends ToolProcessRunner {
+  AdbTool({super.executablePath}) : super(executableName: 'adb');
+
+  static const int _defaultServerPort = 5037;
+
+  Future<void>? _serverStartup;
+
+  /// Ensures an adb server is listening before any command runs. We must not
+  /// rely on adb's implicit `start-server`: its fork-server readiness handshake
+  /// hangs on some Windows setups (the client never sees the server's "ready"
+  /// signal), wedging the very first `adb devices`. Instead we launch the
+  /// server directly in `nodaemon` mode as a *detached* process — it binds the
+  /// port and runs independently of us — then wait until it accepts
+  /// connections. Once up, every normal adb command connects and returns.
+  /// Idempotent and cached, so concurrent callers share one startup; a
+  /// no-op when a server is already running.
+  Future<void> ensureServerRunning() => _serverStartup ??= _startServer();
+
+  Future<void> _startServer() async {
+    final port =
+        int.tryParse(Platform.environment['ANDROID_ADB_SERVER_PORT'] ?? '') ??
+        _defaultServerPort;
+
+    if (await _serverIsListening(port)) return;
+
+    try {
+      // Detached so the server's stdio isn't tied to ours (avoiding the
+      // inherited-handle hang) and it outlives this call like a normal adb
+      // server. A second server can't bind a busy port and simply exits, which
+      // is harmless — we connect to whichever server ends up listening.
+      await startProcess([
+        '-L',
+        'tcp:$port',
+        'nodaemon',
+        'server',
+      ], mode: ProcessStartMode.detached);
+    } catch (error) {
+      logError('Failed to launch adb server', error);
+    }
+
+    final deadline = DateTime.now().add(const Duration(seconds: 15));
+    while (DateTime.now().isBefore(deadline)) {
+      if (await _serverIsListening(port)) return;
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+
+    logError('adb server did not start listening on port $port within timeout');
+    _serverStartup = null; // allow a retry on the next call
+  }
+
+  Future<bool> _serverIsListening(int port) async {
+    try {
+      final socket = await Socket.connect(
+        InternetAddress.loopbackIPv4,
+        port,
+        timeout: const Duration(milliseconds: 500),
+      );
+      socket.destroy();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<List<Device>> getDevices() async {
+    try {
+      await ensureServerRunning();
+      final result = await runText(['devices', '-l']);
+      if (!result.isSuccess) {
+        logError(
+          'adb devices -l returned non-zero exit code',
+          '${result.exitCode} ${result.combinedOutput}',
+        );
+        return const [];
+      }
+
+      final deviceList = <Device>[];
+      for (final line in result.stdout.split('\n').skip(1)) {
+        final parsed = _parseDeviceLine(line);
+        if (parsed != null) {
+          deviceList.add(parsed);
+        }
+      }
+
+      logInfo('Found ${deviceList.length} device(s)');
+      return deviceList;
+    } on ProcessException catch (error) {
+      logError('ProcessException while listing Android devices', error);
+      return const [];
+    } catch (error) {
+      logError('Unexpected error while listing Android devices', error);
+      return const [];
+    }
+  }
+
+  Stream<List<Device>> watchDeviceChanges() async* {
+    Process? process;
+
+    try {
+      await ensureServerRunning();
+      process = await startProcess(['track-devices', '-l']);
+      await for (final line in stdoutLines(process)) {
+        if (line.trim().isEmpty) continue;
+        yield await getDevices();
+      }
+    } finally {
+      await stopProcess(process);
+    }
+  }
+
+  Future<Device> describeDevice(String deviceId) async {
+    try {
+      final result = await runText(['-s', deviceId, 'shell', 'getprop']);
+      if (!result.isSuccess) {
+        logError(
+          'adb shell getprop returned non-zero exit for $deviceId',
+          result.combinedOutput,
+        );
+        return Device.android(deviceId, 'unavailable');
+      }
+
+      final properties = _parseAndroidGetPropOutput(result.stdout);
+      final brand = _normalizeAndroidBrand(
+        _firstNonEmpty(
+          properties['ro.product.brand'],
+          properties['ro.product.manufacturer'],
+        ),
+      );
+      final model = _firstNonEmpty(
+        properties['ro.product.marketname'],
+        properties['ro.product.model'],
+      );
+      final name = _firstNonEmpty(
+        properties['ro.product.device'],
+        properties['ro.product.name'],
+      );
+      final serialNumber = _firstNonEmpty(
+        properties['ro.serialno'],
+        properties['ro.boot.serialno'],
+      );
+
+      return AndroidDevice(
+        deviceId,
+        'device',
+        brand: brand,
+        model: model,
+        name: name,
+        serialNumber: serialNumber,
+      );
+    } on ProcessException catch (error) {
+      logError('ProcessException describing Android device $deviceId', error);
+      return Device.android(deviceId, 'unavailable');
+    } catch (error) {
+      logError('Unexpected error describing Android device $deviceId', error);
+      return Device.android(deviceId, 'unavailable');
+    }
+  }
+
+  /// Broader device info for the device home screen: battery, storage,
+  /// display, connectivity, cellular, developer state and software details.
+  /// All sub-commands run concurrently over one adb connection; any single
+  /// command failing just leaves its fields null rather than failing the
+  /// whole fetch.
+  Future<DeviceInfo> fetchDeviceInfo(AndroidDevice device) async {
+    final deviceId = device.id;
+    try {
+      final results = await Future.wait([
+        runText(['-s', deviceId, 'shell', 'getprop']),
+        runText(['-s', deviceId, 'shell', 'dumpsys', 'battery']),
+        runText(['-s', deviceId, 'shell', 'df', '/data']),
+        runText(['-s', deviceId, 'shell', 'wm', 'size']),
+        runText(['-s', deviceId, 'shell', 'wm', 'density']),
+        runText(['-s', deviceId, 'shell', 'dumpsys', 'display']),
+        runText([
+          '-s',
+          deviceId,
+          'shell',
+          'settings',
+          'get',
+          'global',
+          'wifi_on',
+        ]),
+        runText([
+          '-s',
+          deviceId,
+          'shell',
+          'settings',
+          'get',
+          'global',
+          'bluetooth_on',
+        ]),
+        runText([
+          '-s',
+          deviceId,
+          'shell',
+          'settings',
+          'get',
+          'global',
+          'development_settings_enabled',
+        ]),
+        runText([
+          '-s',
+          deviceId,
+          'shell',
+          'settings',
+          'get',
+          'global',
+          'adb_enabled',
+        ]),
+        runText([
+          '-s',
+          deviceId,
+          'shell',
+          'ip',
+          '-f',
+          'inet',
+          'addr',
+          'show',
+          'wlan0',
+        ]),
+      ]);
+
+      final properties = _parseAndroidGetPropOutput(results[0].stdout);
+      final mccMnc = _splitMccMnc(properties['gsm.operator.numeric']);
+      final sdkLevel = int.tryParse(properties['ro.build.version.sdk'] ?? '');
+
+      return DeviceInfo(
+        identity: DeviceIdentityInfo(
+          deviceName: device.name ?? device.model,
+          manufacturer: _firstNonEmpty(
+            properties['ro.product.manufacturer'],
+            device.brand,
+          ),
+          model: device.model,
+          osName: 'Android',
+          osVersion: properties['ro.build.version.release'],
+          buildVersion: properties['ro.build.display.id'],
+          serialNumber: device.serialNumber,
+          cpuArchitecture: properties['ro.product.cpu.abi'],
+        ),
+        battery: _parseAndroidBattery(results[1].stdout),
+        storage: _parseAndroidStorage(results[2].stdout),
+        display: _parseAndroidDisplay(
+          sizeOutput: results[3].stdout,
+          densityOutput: results[4].stdout,
+          displayDumpOutput: results[5].stdout,
+        ),
+        connectivity: DeviceConnectivityInfo(
+          usbConnected: !device.isWireless,
+          wifiEnabled: _parseAndroidBoolSetting(results[6].stdout),
+          bluetoothEnabled: _parseAndroidBoolSetting(results[7].stdout),
+          ipAddress: _parseAndroidIpAddress(results[10].stdout),
+        ),
+        cellular: DeviceCellularInfo(
+          carrierName: properties['gsm.operator.alpha'],
+          simOperatorName: properties['gsm.sim.operator.alpha'],
+          networkType: properties['gsm.network.type'],
+          simState: properties['gsm.sim.state'],
+          mcc: mccMnc?.mcc,
+          mnc: mccMnc?.mnc,
+        ),
+        developerState: DeviceDeveloperStateInfo(
+          developerModeEnabled: _parseAndroidBoolSetting(results[8].stdout),
+          adbEnabled: _parseAndroidBoolSetting(results[9].stdout),
+          debuggingReady: device.status == 'device',
+        ),
+        software: DeviceSoftwareInfo(
+          sdkLevel: sdkLevel,
+          securityPatch: properties['ro.build.version.security_patch'],
+          locale: properties['persist.sys.locale'],
+          timeZone: properties['persist.sys.timezone'],
+        ),
+      );
+    } catch (error) {
+      logError('Failed to fetch device info for $deviceId', error);
+      return const DeviceInfo();
+    }
+  }
+
+  Map<String, String> _parseColonSeparated(String output) {
+    final values = <String, String>{};
+    for (final rawLine in output.split('\n')) {
+      final line = rawLine.trim();
+      final separatorIndex = line.indexOf(':');
+      if (separatorIndex <= 0) continue;
+      final key = line.substring(0, separatorIndex).trim();
+      final value = line.substring(separatorIndex + 1).trim();
+      if (key.isEmpty || value.isEmpty) continue;
+      values[key] = value;
+    }
+    return values;
+  }
+
+  /// `dumpsys battery` reports BatteryManager int constants for status/health
+  /// and temperature in tenths of a degree Celsius.
+  DeviceBatteryInfo _parseAndroidBattery(String output) {
+    final values = _parseColonSeparated(output);
+    final level = int.tryParse(values['level'] ?? '');
+    final scale = int.tryParse(values['scale'] ?? '');
+    final percentage = (level != null && scale != null && scale > 0)
+        ? (level / scale * 100).round()
+        : level;
+
+    final chargingState = switch (int.tryParse(values['status'] ?? '')) {
+      2 => BatteryChargingState.charging,
+      3 => BatteryChargingState.discharging,
+      4 => BatteryChargingState.notCharging,
+      5 => BatteryChargingState.full,
+      _ => null,
+    };
+
+    final health = switch (int.tryParse(values['health'] ?? '')) {
+      2 => BatteryHealth.good,
+      3 => BatteryHealth.overheat,
+      4 => BatteryHealth.dead,
+      5 => BatteryHealth.overVoltage,
+      7 => BatteryHealth.cold,
+      _ => null,
+    };
+
+    final temperatureTenths = int.tryParse(values['temperature'] ?? '');
+
+    return DeviceBatteryInfo(
+      percentage: percentage,
+      chargingState: chargingState,
+      health: health,
+      temperatureCelsius: temperatureTenths != null
+          ? temperatureTenths / 10
+          : null,
+    );
+  }
+
+  /// Parses `df /data` — the closest reliable, permission-free proxy for
+  /// overall device storage (the shared userdata partition).
+  DeviceStorageInfo _parseAndroidStorage(String output) {
+    for (final rawLine in output.split('\n')) {
+      final columns = rawLine.trim().split(RegExp(r'\s+'));
+      if (columns.length < 6 || columns.last != '/data') continue;
+      final totalKb = int.tryParse(columns[columns.length - 5]);
+      final usedKb = int.tryParse(columns[columns.length - 4]);
+      final availableKb = int.tryParse(columns[columns.length - 3]);
+      if (totalKb == null) continue;
+      return DeviceStorageInfo(
+        totalBytes: totalKb * 1024,
+        usedBytes: usedKb != null ? usedKb * 1024 : null,
+        availableBytes: availableKb != null ? availableKb * 1024 : null,
+      );
+    }
+    return const DeviceStorageInfo();
+  }
+
+  DeviceDisplayInfo _parseAndroidDisplay({
+    required String sizeOutput,
+    required String densityOutput,
+    required String displayDumpOutput,
+  }) {
+    final sizeMatch =
+        RegExp(r'Override size:\s*(\d+)x(\d+)').firstMatch(sizeOutput) ??
+        RegExp(r'Physical size:\s*(\d+)x(\d+)').firstMatch(sizeOutput);
+    final densityMatch =
+        RegExp(r'Override density:\s*(\d+)').firstMatch(densityOutput) ??
+        RegExp(r'Physical density:\s*(\d+)').firstMatch(densityOutput);
+    final refreshMatch = RegExp(
+      r'refreshRate=([\d.]+)',
+    ).firstMatch(displayDumpOutput);
+    final rotationMatch = RegExp(
+      r'\brotation=(\d)',
+    ).firstMatch(displayDumpOutput);
+
+    DisplayOrientation? orientation;
+    final rotation = rotationMatch != null
+        ? int.tryParse(rotationMatch.group(1)!)
+        : null;
+    if (rotation != null) {
+      orientation = (rotation == 0 || rotation == 2)
+          ? DisplayOrientation.portrait
+          : DisplayOrientation.landscape;
+    }
+
+    return DeviceDisplayInfo(
+      widthPx: sizeMatch != null ? int.tryParse(sizeMatch.group(1)!) : null,
+      heightPx: sizeMatch != null ? int.tryParse(sizeMatch.group(2)!) : null,
+      densityDpi: densityMatch != null
+          ? int.tryParse(densityMatch.group(1)!)
+          : null,
+      refreshRateHz: refreshMatch != null
+          ? double.tryParse(refreshMatch.group(1)!)
+          : null,
+      orientation: orientation,
+    );
+  }
+
+  bool? _parseAndroidBoolSetting(String output) {
+    return switch (output.trim()) {
+      '1' => true,
+      '0' => false,
+      _ => null,
+    };
+  }
+
+  String? _parseAndroidIpAddress(String output) {
+    return RegExp(r'inet (\d+\.\d+\.\d+\.\d+)').firstMatch(output)?.group(1);
+  }
+
+  ({String mcc, String mnc})? _splitMccMnc(String? numeric) {
+    if (numeric == null) return null;
+    final trimmed = numeric.trim();
+    if (!RegExp(r'^\d{5,6}$').hasMatch(trimmed)) return null;
+    return (mcc: trimmed.substring(0, 3), mnc: trimmed.substring(3));
+  }
+
+
+  /// Starts an interactive `adb shell` for [deviceId]. Caller owns the process
+  /// (stdin/stdout) and must kill it when done.
+  Future<Process> startInteractiveShell(String deviceId) async {
+    await ensureServerRunning();
+    return startProcess(['-s', deviceId, 'shell']);
+  }
+
+  /// Collects identity / OS / battery / storage fields for the 「详情」pane.
+  /// Mirrors the common getprop + dumpsys battery + df pattern used by open
+  /// ADB GUIs (Gaze / Droidsmith-style), without pulling in a second ADB kit.
+  Future<DeviceDetailsSnapshot> fetchDeviceDetails(
+    String deviceId, {
+    DevicePerformanceStats? performance,
+  }) async {
+    try {
+      await ensureServerRunning();
+      final propResult = await runText(['-s', deviceId, 'shell', 'getprop']);
+      final props = propResult.isSuccess
+          ? _parseAndroidGetPropOutput(propResult.stdout)
+          : <String, String>{};
+
+      final batteryResult = await runText([
+        '-s',
+        deviceId,
+        'shell',
+        'dumpsys',
+        'battery',
+      ]);
+      final battery = batteryResult.isSuccess
+          ? _parseBatteryDump(batteryResult.stdout)
+          : const <String, String>{};
+
+      final dfResult = await runText([
+        '-s',
+        deviceId,
+        'shell',
+        'df',
+        '-h',
+        '/data',
+        '/sdcard',
+      ]);
+      final storageRows = dfResult.isSuccess
+          ? _parseDfRows(dfResult.stdout)
+          : const <DeviceDetailsRow>[];
+
+      String? prop(String key) {
+        final v = props[key]?.trim();
+        return (v == null || v.isEmpty) ? null : v;
+      }
+
+      final identity = <DeviceDetailsRow>[
+        if (prop('ro.product.brand') != null ||
+            prop('ro.product.manufacturer') != null)
+          DeviceDetailsRow(
+            label: '品牌',
+            value: _normalizeAndroidBrand(
+                  _firstNonEmpty(
+                    prop('ro.product.brand'),
+                    prop('ro.product.manufacturer'),
+                  ),
+                ) ??
+                '—',
+          ),
+        if (prop('ro.product.marketname') != null ||
+            prop('ro.product.model') != null)
+          DeviceDetailsRow(
+            label: '型号',
+            value:
+                _firstNonEmpty(
+                  prop('ro.product.marketname'),
+                  prop('ro.product.model'),
+                ) ??
+                '—',
+          ),
+        if (prop('ro.product.device') != null)
+          DeviceDetailsRow(label: '代号', value: prop('ro.product.device')!),
+        if (prop('ro.serialno') != null || prop('ro.boot.serialno') != null)
+          DeviceDetailsRow(
+            label: '序列号',
+            value:
+                _firstNonEmpty(prop('ro.serialno'), prop('ro.boot.serialno')) ??
+                '—',
+          ),
+        DeviceDetailsRow(label: '设备 ID', value: deviceId),
+      ];
+
+      final system = <DeviceDetailsRow>[
+        if (prop('ro.build.version.release') != null)
+          DeviceDetailsRow(
+            label: 'Android 版本',
+            value: prop('ro.build.version.release')!,
+          ),
+        if (prop('ro.build.version.sdk') != null)
+          DeviceDetailsRow(
+            label: 'API 级别',
+            value: prop('ro.build.version.sdk')!,
+          ),
+        if (prop('ro.build.display.id') != null)
+          DeviceDetailsRow(
+            label: '系统版本号',
+            value: prop('ro.build.display.id')!,
+          ),
+        if (prop('ro.build.id') != null)
+          DeviceDetailsRow(label: 'Build ID', value: prop('ro.build.id')!),
+        if (prop('ro.product.cpu.abi') != null)
+          DeviceDetailsRow(label: 'CPU ABI', value: prop('ro.product.cpu.abi')!),
+        if (prop('ro.hardware') != null)
+          DeviceDetailsRow(label: '硬件', value: prop('ro.hardware')!),
+        if (prop('gsm.version.baseband') != null)
+          DeviceDetailsRow(
+            label: '基带',
+            value: prop('gsm.version.baseband')!,
+          ),
+      ];
+
+      final batteryRows = <DeviceDetailsRow>[
+        if (battery['level'] != null)
+          DeviceDetailsRow(
+            label: '电量',
+            value: '${battery['level']}%',
+          ),
+        if (battery['status'] != null)
+          DeviceDetailsRow(
+            label: '充电状态',
+            value: _batteryStatusLabel(battery['status']!),
+          ),
+        if (battery['health'] != null)
+          DeviceDetailsRow(
+            label: '电池健康',
+            value: _batteryHealthLabel(battery['health']!),
+          ),
+        if (battery['temperature'] != null)
+          DeviceDetailsRow(
+            label: '电池温度',
+            value: _formatBatteryTemp(battery['temperature']!),
+          ),
+        if (battery['voltage'] != null)
+          DeviceDetailsRow(
+            label: '电压',
+            value: _formatBatteryVoltage(battery['voltage']!),
+          ),
+        if (battery['technology'] != null)
+          DeviceDetailsRow(label: '电池类型', value: battery['technology']!),
+      ];
+
+      final perfRows = <DeviceDetailsRow>[];
+      final cpu = performance?.cpu;
+      final mem = performance?.memory;
+      if (cpu != null) {
+        perfRows.add(
+          DeviceDetailsRow(
+            label: 'CPU 核心',
+            value: '${cpu.coreCount}',
+          ),
+        );
+        perfRows.add(
+          DeviceDetailsRow(
+            label: '负载 (1/5/15 分)',
+            value:
+                '${cpu.loadAverage1m.toStringAsFixed(2)} / '
+                '${cpu.loadAverage5m.toStringAsFixed(2)} / '
+                '${cpu.loadAverage15m.toStringAsFixed(2)}',
+          ),
+        );
+        perfRows.add(
+          DeviceDetailsRow(
+            label: 'CPU 利用率(估)',
+            value: '${cpu.utilisationPercent.toStringAsFixed(0)}%',
+          ),
+        );
+      }
+      if (mem != null) {
+        perfRows.add(
+          DeviceDetailsRow(
+            label: '内存总量',
+            value: _formatKb(mem.totalKb),
+          ),
+        );
+        perfRows.add(
+          DeviceDetailsRow(
+            label: '可用内存',
+            value: _formatKb(mem.availableKb),
+          ),
+        );
+        perfRows.add(
+          DeviceDetailsRow(
+            label: '内存占用',
+            value: '${mem.usagePercent.toStringAsFixed(0)}%',
+          ),
+        );
+      }
+
+      return DeviceDetailsSnapshot(
+        sections: [
+          DeviceDetailsSection(title: '设备', rows: identity),
+          DeviceDetailsSection(title: '系统', rows: system),
+          DeviceDetailsSection(title: '电池', rows: batteryRows),
+          DeviceDetailsSection(title: '存储', rows: storageRows),
+          DeviceDetailsSection(title: '性能', rows: perfRows),
+        ],
+      );
+    } catch (error) {
+      logError('Failed to fetch device details for $deviceId', error);
+      return DeviceDetailsSnapshot(
+        sections: const [],
+        error: '读取设备详情失败：$error',
+      );
+    }
+  }
+
+  Map<String, String> _parseBatteryDump(String stdout) {
+    final out = <String, String>{};
+    for (final raw in stdout.split('\n')) {
+      final line = raw.trim();
+      final idx = line.indexOf(':');
+      if (idx <= 0) continue;
+      final key = line.substring(0, idx).trim();
+      final value = line.substring(idx + 1).trim();
+      if (key.isEmpty || value.isEmpty) continue;
+      out[key] = value;
+    }
+    return out;
+  }
+
+  List<DeviceDetailsRow> _parseDfRows(String stdout) {
+    final rows = <DeviceDetailsRow>[];
+    for (final raw in stdout.split('\n').skip(1)) {
+      final parts = raw.trim().split(RegExp(r'\s+'));
+      if (parts.length < 6) continue;
+      final mount = parts.last;
+      final size = parts[1];
+      final used = parts[2];
+      final avail = parts[3];
+      final usePct = parts[4];
+      final label = mount == '/data'
+          ? '内部存储 (/data)'
+          : mount == '/sdcard' || mount == '/storage/emulated/0'
+          ? '用户存储 (/sdcard)'
+          : mount;
+      rows.add(
+        DeviceDetailsRow(
+          label: label,
+          value: '共 $size · 已用 $used ($usePct) · 可用 $avail',
+        ),
+      );
+    }
+    return rows;
+  }
+
+  String _batteryStatusLabel(String code) {
+    return switch (int.tryParse(code)) {
+      2 => '充电中',
+      3 => '放电中',
+      4 => '未充电',
+      5 => '已充满',
+      _ => code,
+    };
+  }
+
+  String _batteryHealthLabel(String code) {
+    return switch (int.tryParse(code)) {
+      2 => '良好',
+      3 => '过热',
+      4 => '损坏',
+      5 => '过压',
+      6 => '未知故障',
+      7 => '过冷',
+      _ => code,
+    };
+  }
+
+  String _formatBatteryTemp(String raw) {
+    final tenths = int.tryParse(raw);
+    if (tenths == null) return raw;
+    return '${(tenths / 10).toStringAsFixed(1)} °C';
+  }
+
+  String _formatBatteryVoltage(String raw) {
+    final mv = int.tryParse(raw);
+    if (mv == null) return raw;
+    if (mv > 1000) return '${(mv / 1000).toStringAsFixed(2)} V';
+    return '$mv mV';
+  }
+
+  String _formatKb(int kb) {
+    if (kb >= 1024 * 1024) {
+      return '${(kb / (1024 * 1024)).toStringAsFixed(1)} GB';
+    }
+    if (kb >= 1024) {
+      return '${(kb / 1024).toStringAsFixed(0)} MB';
+    }
+    return '$kb KB';
+  }
+
+  Future<WirelessServiceDiscoveryResult> discoverMdnsServices() async {
+    try {
+      final result = await runText(['mdns', 'services']);
+      if (!result.isSuccess) {
+        final details = describeCommandFailure(
+          '发现无线 ADB 服务失败。',
+          result,
+        );
+        logError('Failed to discover wireless ADB services', details);
+        return WirelessServiceDiscoveryResult.failure(error: details);
+      }
+
+      final services = <WirelessDebugService>[];
+      for (final rawLine in result.stdout.split('\n')) {
+        final line = rawLine.trim();
+        if (line.isEmpty ||
+            line.startsWith('List of discovered mdns services')) {
+          continue;
+        }
+
+        final match = RegExp(
+          r'^(.+?)\s+(_adb-tls-(?:connect|pairing)\._tcp)\.?\s+([^\s:]+):(\d+)$',
+        ).firstMatch(line);
+        if (match == null) {
+          continue;
+        }
+
+        final port = int.tryParse(match.group(4)!);
+        if (port == null) {
+          continue;
+        }
+
+        services.add(
+          WirelessDebugService(
+            name: match.group(1)!.trim(),
+            type: _parseMdnsServiceType(match.group(2)!),
+            host: match.group(3)!.trim(),
+            port: port,
+          ),
+        );
+      }
+
+      services.sort((left, right) {
+        final typeOrder = left.type.index.compareTo(right.type.index);
+        if (typeOrder != 0) return typeOrder;
+        final hostOrder = left.host.compareTo(right.host);
+        if (hostOrder != 0) return hostOrder;
+        return left.port.compareTo(right.port);
+      });
+
+      return WirelessServiceDiscoveryResult.success(services: services);
+    } catch (error) {
+      logError('Exception while discovering mdns services', error);
+      return WirelessServiceDiscoveryResult.failure(
+        error:
+            '发现无线 ADB 服务失败：${describeError(error)}',
+      );
+    }
+  }
+
+  Future<DeviceCommandResult> pairDevice({
+    required String address,
+    required String pairingCode,
+  }) async {
+    logInfo('Pairing with $address…');
+    try {
+      final result = await runText(['pair', address, pairingCode]);
+      if (!result.isSuccess) {
+        final details = describeCommandFailure(
+          '与 $address 配对失败。',
+          result,
+        );
+        logError('Pair command failed for $address', details);
+        return DeviceCommandResult.failure(error: details);
+      }
+
+      final message = result.combinedOutput;
+      logSuccess('Paired with $address');
+      return DeviceCommandResult.success(
+        message: message.isEmpty
+            ? '已成功与 $address 配对。'
+            : message,
+      );
+    } catch (error) {
+      logError('Exception while pairing with $address', error);
+      return DeviceCommandResult.failure(
+        error: '与 $address 配对失败：${describeError(error)}',
+      );
+    }
+  }
+
+  Future<DeviceCommandResult> connectDevice(String address) async {
+    logInfo('Connecting to $address…');
+    try {
+      final result = await runText(['connect', address]);
+      final output = result.combinedOutput;
+      final failed =
+          !result.isSuccess || output.toLowerCase().contains('failed');
+
+      if (failed) {
+        final details = describeCommandFailure(
+          '连接 $address 失败。',
+          result,
+        );
+        logError('Connect command failed for $address', details);
+        return DeviceCommandResult.failure(error: details);
+      }
+
+      logSuccess('Connected to $address');
+      return DeviceCommandResult.success(
+        message: output.isEmpty ? '已连接到 $address。' : output,
+      );
+    } catch (error) {
+      logError('Exception while connecting to $address', error);
+      return DeviceCommandResult.failure(
+        error: '连接 $address 失败：${describeError(error)}',
+      );
+    }
+  }
+
+  Future<DeviceCommandResult> installApk({
+    required String deviceId,
+    required String apkPath,
+  }) async {
+    try {
+      final result = await runText(['-s', deviceId, 'install', '-r', apkPath]);
+      final output = result.combinedOutput;
+      final failed = !result.isSuccess || _looksLikeInstallFailure(output);
+
+      if (failed) {
+        final details = describeCommandFailure(
+          '在 $deviceId 上安装 APK 失败。',
+          result,
+        );
+        logError('APK install failed for $deviceId', details);
+        return DeviceCommandResult.failure(error: details);
+      }
+
+      return DeviceCommandResult.success(
+        message: output.isEmpty ? '已在 $deviceId 上安装 APK。' : output,
+      );
+    } catch (error) {
+      logError('Exception while installing APK on $deviceId', error);
+      return DeviceCommandResult.failure(
+        error: '在 $deviceId 上安装 APK 失败：${describeError(error)}',
+      );
+    }
+  }
+
+  Future<Map<String, String>> getPidToPackageMap(String deviceId) async {
+    try {
+      final result = await runText(['-s', deviceId, 'shell', 'ps', '-A']);
+      final pidToPackage = <String, String>{};
+
+      for (final line in result.stdout.split('\n').skip(1)) {
+        if (line.trim().isEmpty) continue;
+
+        final parts = line.trim().split(RegExp(r'\s+'));
+        if (parts.length >= 9) {
+          pidToPackage[parts[1]] = parts[8];
+        }
+      }
+
+      return pidToPackage;
+    } catch (error) {
+      logError('Failed to read PID->package map for $deviceId', error);
+      return const {};
+    }
+  }
+
+  ToolStreamSession<LogEntry> startLogcat(String deviceId) {
+    Process? process;
+    var stopRequested = false;
+    var stopFuture = Future<void>.value();
+    late final StreamController<LogEntry> controller;
+    final LogcatParser parser = const LogcatParser();
+
+    Future<void> stop() {
+      if (stopRequested) {
+        return stopFuture;
+      }
+      stopRequested = true;
+      stopFuture = stopProcess(process);
+      return stopFuture;
+    }
+
+    controller = StreamController<LogEntry>(
+      onListen: () async {
+        logInfo('Starting logcat for $deviceId');
+        try {
+          process = await startProcess([
+            '-s',
+            deviceId,
+            'logcat',
+            '-v',
+            'threadtime',
+          ]);
+          final stderrFuture = stderrText(process!);
+          var emittedLogs = false;
+
+          await for (final line in stdoutLines(process!)) {
+            final parsed = parser.parse(line);
+            if (parsed != null) {
+              emittedLogs = true;
+              controller.add(parsed);
+            }
+          }
+
+          final stderrOutput = (await stderrFuture).trim();
+          if (!emittedLogs && stderrOutput.isNotEmpty) {
+            controller.add(
+              buildToolErrorEntry(
+                stderrOutput,
+                tag: 'adb logcat',
+                processName: deviceId,
+              ),
+            );
+          }
+        } on ProcessException catch (error) {
+          logError('Failed to start adb logcat for $deviceId', error);
+          controller.add(
+            buildToolErrorEntry(
+              '启动 adb Logcat 失败：${describeError(error)}',
+              tag: 'adb logcat',
+              processName: deviceId,
+            ),
+          );
+        } catch (error) {
+          logError(
+            'Unexpected error while streaming adb logcat for $deviceId',
+            error,
+          );
+          controller.add(
+            buildToolErrorEntry(
+              'adb Logcat 错误：${describeError(error)}',
+              tag: 'adb logcat',
+              processName: deviceId,
+            ),
+          );
+        } finally {
+          logInfo('Logcat stream ended for $deviceId');
+          await stop();
+          await controller.close();
+        }
+      },
+      onCancel: stop,
+    );
+
+    return ToolStreamSession(stream: controller.stream, onStop: stop);
+  }
+
+  Future<void> stopLogcat(String deviceId) async {
+    logInfo('Stopping logcat for $deviceId');
+    await runText(['-s', deviceId, 'shell', 'pkill', 'logcat']);
+  }
+
+  /// Best-effort `adb reconnect <id>` to recover a wedged USB/TCP transport.
+  /// The device briefly bounces (drops offline then re-enumerates), which the
+  /// device watcher observes and reflects in the device list.
+  Future<void> reconnectDevice(String deviceId) async {
+    logInfo('Reconnecting $deviceId');
+    try {
+      await runText(['-s', deviceId, 'reconnect']);
+    } catch (error) {
+      logError('Failed to reconnect $deviceId', error);
+    }
+  }
+
+  /// Returns true when the device answers a lightweight shell round-trip within
+  /// [timeout]. A healthy (even idle) device replies almost immediately, while
+  /// a wedged transport hangs — so the timeout elapses and this returns false.
+  Future<bool> pingDevice(
+    String deviceId, {
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    Process? process;
+    try {
+      process = await startProcess(['-s', deviceId, 'shell', 'true']);
+      final exitCode = await process.exitCode.timeout(
+        timeout,
+        onTimeout: () {
+          process?.kill(ProcessSignal.sigkill);
+          return -1;
+        },
+      );
+      return exitCode == 0;
+    } catch (error) {
+      logError('Liveness probe failed for $deviceId', error);
+      return false;
+    }
+  }
+
+  Future<void> clearLogs(String deviceId) async {
+    logInfo('Clearing adb logcat buffer for $deviceId');
+    await runText(['-s', deviceId, 'logcat', '-c']);
+  }
+
+  /// Captures the device framebuffer as PNG bytes via `screencap`.
+  Future<Uint8List> captureScreenshotPng(String deviceId) async {
+    final bytes = await runBytes([
+      '-s',
+      deviceId,
+      'exec-out',
+      'screencap',
+      '-p',
+    ]);
+    return Uint8List.fromList(bytes);
+  }
+
+  /// Starts `screenrecord` writing to [devicePath] on the device. Stop it with
+  /// [signalStopScreenRecord] (so the mp4 is finalized), then [pullFile] it.
+  Future<Process> startScreenRecord(
+    String deviceId,
+    String devicePath, {
+    int? bitRate,
+    int? timeLimitSeconds,
+  }) {
+    final args = <String>['-s', deviceId, 'shell', 'screenrecord'];
+    if (bitRate != null) args.addAll(['--bit-rate', '$bitRate']);
+    if (timeLimitSeconds != null) {
+      args.addAll(['--time-limit', '$timeLimitSeconds']);
+    }
+    args.add(devicePath);
+    return startProcess(args);
+  }
+
+  /// Sends SIGINT to `screenrecord` so it flushes and finalizes the mp4.
+  Future<void> signalStopScreenRecord(String deviceId) async {
+    await runText(['-s', deviceId, 'shell', 'pkill', '-INT', 'screenrecord']);
+  }
+
+  Future<void> pullFile(String deviceId, String devicePath, String localPath) {
+    return runText(['-s', deviceId, 'pull', devicePath, localPath]);
+  }
+
+  Future<void> removeFile(String deviceId, String devicePath) {
+    return runText(['-s', deviceId, 'shell', 'rm', '-f', devicePath]);
+  }
+
+  Future<int> getUserRotation(String deviceId) async {
+    final result = await runText([
+      '-s',
+      deviceId,
+      'shell',
+      'settings',
+      'get',
+      'system',
+      'user_rotation',
+    ]);
+    return int.tryParse(result.stdout.trim()) ?? 0;
+  }
+
+  /// Forces the device display [rotation] (0–3). Disables auto-rotate so it
+  /// sticks; the user can re-enable auto-rotate on the device afterwards.
+  Future<void> setUserRotation(String deviceId, int rotation) async {
+    await runText([
+      '-s',
+      deviceId,
+      'shell',
+      'settings',
+      'put',
+      'system',
+      'accelerometer_rotation',
+      '0',
+    ]);
+    await runText([
+      '-s',
+      deviceId,
+      'shell',
+      'settings',
+      'put',
+      'system',
+      'user_rotation',
+      '${rotation % 4}',
+    ]);
+  }
+
+  Device? _parseDeviceLine(String line) {
+    if (line.trim().isEmpty) return null;
+
+    final parts = line.trim().split(RegExp(r'\s+'));
+    if (parts.length < 2) return null;
+
+    final deviceId = parts[0];
+    final status = parts[1];
+
+    String? model;
+    String? product;
+
+    for (var index = 2; index < parts.length; index++) {
+      if (parts[index].startsWith('model:')) {
+        model = parts[index].substring('model:'.length);
+      } else if (parts[index].startsWith('product:')) {
+        product = parts[index].substring('product:'.length);
+      }
+    }
+
+    return Device.android(deviceId, status, model: model, name: product);
+  }
+
+  WirelessDebugServiceType _parseMdnsServiceType(String rawValue) {
+    return switch (rawValue.trim()) {
+      '_adb-tls-connect._tcp' => WirelessDebugServiceType.connect,
+      '_adb-tls-pairing._tcp' => WirelessDebugServiceType.pairing,
+      _ => WirelessDebugServiceType.unknown,
+    };
+  }
+
+  String? _firstNonEmpty(String? first, String? second) {
+    if (first != null && first.trim().isNotEmpty) {
+      return first.trim();
+    }
+    if (second != null && second.trim().isNotEmpty) {
+      return second.trim();
+    }
+    return null;
+  }
+
+  String? _normalizeAndroidBrand(String? brand) {
+    if (brand == null) {
+      return null;
+    }
+
+    final trimmed = brand.trim();
+    if (trimmed.isEmpty || trimmed != trimmed.toLowerCase()) {
+      return trimmed.isEmpty ? null : trimmed;
+    }
+
+    final words = trimmed.split(RegExp(r'\s+'));
+    return words
+        .map(
+          (word) => word.isEmpty
+              ? word
+              : '${word[0].toUpperCase()}${word.substring(1)}',
+        )
+        .join(' ');
+  }
+
+  bool _looksLikeInstallFailure(String output) {
+    final normalized = output.toLowerCase();
+    return normalized.contains('failure [') ||
+        normalized.contains('install_failed') ||
+        normalized.contains('failed');
+  }
+
+  Map<String, String> _parseAndroidGetPropOutput(String stdout) {
+    final properties = <String, String>{};
+    final propertyPattern = RegExp(r'^\[([^\]]+)\]:\s*\[(.*)\]$');
+
+    for (final rawLine in stdout.split('\n')) {
+      final line = rawLine.trim();
+      final match = propertyPattern.firstMatch(line);
+      if (match == null) {
+        continue;
+      }
+
+      final key = match.group(1)?.trim();
+      final value = match.group(2)?.trim();
+      if (key == null || key.isEmpty || value == null || value.isEmpty) {
+        continue;
+      }
+
+      properties[key] = value;
+    }
+
+    return properties;
+  }
+
+  Future<String?> readProcFile(String deviceId, String path) async {
+    try {
+      final result = await runText(['-s', deviceId, 'shell', 'cat', path]);
+      if (!result.isSuccess) return null;
+      return result.stdout;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<List<InstalledAppInfo>> listRecentlyInstalledApps(
+    String deviceId,
+  ) async {
+    try {
+      final apps = await _dumpInstalledApps(deviceId);
+      final thirdParty =
+          apps
+              .where((app) => !app.isSystemApp && app.installTime != null)
+              .toList()
+            ..sort((a, b) => b.installTime!.compareTo(a.installTime!));
+
+      return thirdParty
+          .take(5)
+          .map(
+            (app) => InstalledAppInfo(
+              packageName: app.packageName,
+              installTime: app.installTime,
+            ),
+          )
+          .toList();
+    } catch (error) {
+      logError('Failed to list recently installed apps', error);
+      return [];
+    }
+  }
+
+  /// Full app inventory for the Apps feature — every installed package with
+  /// version, system/enabled flags, and on-device APK path, alphabetized.
+  /// System apps are excluded by default; pass [includeSystemApps] to see
+  /// them too (there can be hundreds on a stock device).
+  Future<List<AppInfo>> listApps(
+    String deviceId, {
+    bool includeSystemApps = false,
+  }) async {
+    try {
+      final apps = await _dumpInstalledApps(deviceId);
+      final filtered = includeSystemApps
+          ? apps
+          : apps.where((app) => !app.isSystemApp).toList();
+      filtered.sort(
+        (a, b) =>
+            a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()),
+      );
+      return filtered;
+    } catch (error) {
+      logError('Failed to list apps for $deviceId', error);
+      return [];
+    }
+  }
+
+  Future<DeviceCommandResult> uninstallApp(
+    String deviceId,
+    String packageName,
+  ) async {
+    try {
+      final result = await runText(['-s', deviceId, 'uninstall', packageName]);
+      final output = result.combinedOutput;
+      final failed =
+          !result.isSuccess || output.toLowerCase().contains('failure');
+      if (failed) {
+        final details = describeCommandFailure(
+          '卸载 $packageName 失败。',
+          result,
+        );
+        logError('Uninstall failed for $packageName on $deviceId', details);
+        return DeviceCommandResult.failure(error: details);
+      }
+
+      logSuccess('Uninstalled $packageName from $deviceId');
+      return DeviceCommandResult.success(message: '已卸载 $packageName。');
+    } catch (error) {
+      logError('Exception while uninstalling $packageName on $deviceId', error);
+      return DeviceCommandResult.failure(
+        error: '卸载 $packageName 失败：${describeError(error)}',
+      );
+    }
+  }
+
+  /// Launches [packageName]'s launcher activity via the well-known `monkey`
+  /// single-event trick (`-p <pkg> -c android.intent.category.LAUNCHER 1`) —
+  /// works without first resolving the app's actual launch component.
+  Future<DeviceCommandResult> launchApp(
+    String deviceId,
+    String packageName,
+  ) async {
+    try {
+      final result = await runText([
+        '-s',
+        deviceId,
+        'shell',
+        'monkey',
+        '-p',
+        packageName,
+        '-c',
+        'android.intent.category.LAUNCHER',
+        '1',
+      ]);
+      final output = result.combinedOutput.toLowerCase();
+      final failed =
+          !result.isSuccess ||
+          output.contains('no activities found') ||
+          output.contains('aborting');
+      if (failed) {
+        final details = describeCommandFailure(
+          '打开 $packageName 失败。',
+          result,
+        );
+        logError('Launch failed for $packageName on $deviceId', details);
+        return DeviceCommandResult.failure(error: details);
+      }
+
+      return DeviceCommandResult.success(message: '已打开 $packageName。');
+    } catch (error) {
+      logError('Exception while launching $packageName on $deviceId', error);
+      return DeviceCommandResult.failure(
+        error: '打开 $packageName 失败：${describeError(error)}',
+      );
+    }
+  }
+
+  Future<DeviceCommandResult> forceStopApp(
+    String deviceId,
+    String packageName,
+  ) async {
+    try {
+      final result = await runText([
+        '-s',
+        deviceId,
+        'shell',
+        'am',
+        'force-stop',
+        packageName,
+      ]);
+      if (!result.isSuccess) {
+        final details = describeCommandFailure(
+          '强制停止 $packageName 失败。',
+          result,
+        );
+        logError('Force-stop failed for $packageName on $deviceId', details);
+        return DeviceCommandResult.failure(error: details);
+      }
+      return DeviceCommandResult.success(
+        message: '已强制停止 $packageName。',
+      );
+    } catch (error) {
+      logError(
+        'Exception while force-stopping $packageName on $deviceId',
+        error,
+      );
+      return DeviceCommandResult.failure(
+        error: '强制停止 $packageName 失败：${describeError(error)}',
+      );
+    }
+  }
+
+  /// Wipes [packageName]'s data and cache via `pm clear` — irreversible, the
+  /// caller must confirm with the user first.
+  Future<DeviceCommandResult> clearAppData(
+    String deviceId,
+    String packageName,
+  ) async {
+    try {
+      final result = await runText([
+        '-s',
+        deviceId,
+        'shell',
+        'pm',
+        'clear',
+        packageName,
+      ]);
+      final output = result.combinedOutput;
+      final failed =
+          !result.isSuccess || !output.toLowerCase().contains('success');
+      if (failed) {
+        final details = describeCommandFailure(
+          '清除 $packageName 的数据失败。',
+          result,
+        );
+        logError('Clear data failed for $packageName on $deviceId', details);
+        return DeviceCommandResult.failure(error: details);
+      }
+
+      return DeviceCommandResult.success(
+        message: '已清除 $packageName 的数据。',
+      );
+    } catch (error) {
+      logError(
+        'Exception while clearing data for $packageName on $deviceId',
+        error,
+      );
+      return DeviceCommandResult.failure(
+        error: '清除 $packageName 的数据失败：${describeError(error)}',
+      );
+    }
+  }
+
+  /// Opens the OS "App info" settings screen for [packageName].
+  Future<void> openAppInfoSettings(String deviceId, String packageName) async {
+    await runText([
+      '-s',
+      deviceId,
+      'shell',
+      'am',
+      'start',
+      '-a',
+      'android.settings.APPLICATION_DETAILS_SETTINGS',
+      '-d',
+      'package:$packageName',
+    ]);
+  }
+
+  /// Resolves the on-device path to [packageName]'s base APK (preferred over
+  /// any split APKs) via `pm path`, for icon extraction.
+  Future<String?> getApkPath(String deviceId, String packageName) async {
+    try {
+      final result = await runText([
+        '-s',
+        deviceId,
+        'shell',
+        'pm',
+        'path',
+        packageName,
+      ]);
+      if (!result.isSuccess) return null;
+
+      String? firstPath;
+      for (final rawLine in result.stdout.split('\n')) {
+        final line = rawLine.trim();
+        if (!line.startsWith('package:')) continue;
+        final path = line.substring('package:'.length).trim();
+        firstPath ??= path;
+        if (path.endsWith('base.apk')) return path;
+      }
+      return firstPath;
+    } catch (error) {
+      logError(
+        'Failed to resolve APK path for $packageName on $deviceId',
+        error,
+      );
+      return null;
+    }
+  }
+
+  /// Parses `dumpsys package packages` into one [AppInfo] per package block —
+  /// the shared source for [listApps] (full inventory) and
+  /// [listRecentlyInstalledApps] (top-5 third-party by install time).
+  Future<List<AppInfo>> _dumpInstalledApps(String deviceId) async {
+    final pkgsResult = await runText([
+      '-s',
+      deviceId,
+      'shell',
+      'pm',
+      'list',
+      'packages',
+      '-3',
+    ]);
+    final thirdParty = <String>{};
+    final thirdPartyEnumerated = pkgsResult.isSuccess;
+    if (thirdPartyEnumerated) {
+      for (final line in pkgsResult.stdout.split('\n')) {
+        final trimmed = line.trim();
+        if (trimmed.startsWith('package:')) {
+          thirdParty.add(trimmed.substring('package:'.length));
+        }
+      }
+    }
+
+    final dumpsysResult = await runText([
+      '-s',
+      deviceId,
+      'shell',
+      'dumpsys',
+      'package',
+      'packages',
+    ]);
+    if (!dumpsysResult.isSuccess) return [];
+
+    final apps = <AppInfo>[];
+    String? currentPackage;
+    String? versionName;
+    String? versionCode;
+    DateTime? firstInstall;
+    DateTime? lastUpdate;
+    String? codePath;
+    var sawSystemFlag = false;
+    var sawEnabledLine = false;
+    var sawEnabledFalse = false;
+
+    void flush() {
+      final packageName = currentPackage;
+      if (packageName == null) return;
+      apps.add(
+        AppInfo(
+          packageName: packageName,
+          versionName: versionName,
+          versionCode: versionCode,
+          isSystemApp: thirdPartyEnumerated
+              ? (sawSystemFlag || !thirdParty.contains(packageName))
+              : sawSystemFlag,
+          isEnabled: sawEnabledLine ? !sawEnabledFalse : true,
+          apkPath: codePath,
+          installTime: firstInstall,
+          updateTime: lastUpdate,
+        ),
+      );
+    }
+
+    for (final rawLine in dumpsysResult.stdout.split('\n')) {
+      final line = rawLine.trim();
+
+      final pkgMatch = RegExp(r'^Package\s*\[([^\]]+)\]').firstMatch(line);
+      if (pkgMatch != null) {
+        flush();
+        currentPackage = pkgMatch.group(1)!;
+        versionName = null;
+        versionCode = null;
+        firstInstall = null;
+        lastUpdate = null;
+        codePath = null;
+        sawSystemFlag = false;
+        sawEnabledLine = false;
+        sawEnabledFalse = false;
+        continue;
+      }
+      if (currentPackage == null) continue;
+
+      final versionNameMatch = RegExp(r'versionName=(\S+)').firstMatch(line);
+      if (versionNameMatch != null) versionName = versionNameMatch.group(1);
+
+      final versionCodeMatch = RegExp(r'versionCode=(\d+)').firstMatch(line);
+      if (versionCodeMatch != null) versionCode = versionCodeMatch.group(1);
+
+      final firstInstallMatch = RegExp(
+        r'firstInstallTime=(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})',
+      ).firstMatch(line);
+      if (firstInstallMatch != null) {
+        firstInstall = DateTime.tryParse(firstInstallMatch.group(1)!);
+      }
+
+      final lastUpdateMatch = RegExp(
+        r'lastUpdateTime=(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})',
+      ).firstMatch(line);
+      if (lastUpdateMatch != null) {
+        lastUpdate = DateTime.tryParse(lastUpdateMatch.group(1)!);
+      }
+
+      final codePathMatch = RegExp(r'^codePath=(.+)$').firstMatch(line);
+      if (codePathMatch != null) codePath = codePathMatch.group(1)!.trim();
+
+      if (line.startsWith('flags=') || line.startsWith('pkgFlags=')) {
+        if (line.contains('SYSTEM')) sawSystemFlag = true;
+      }
+
+      if (!sawEnabledLine) {
+        final enabledMatch = RegExp(r'\benabled=(\d+)').firstMatch(line);
+        if (enabledMatch != null) {
+          sawEnabledLine = true;
+          final value = int.tryParse(enabledMatch.group(1)!) ?? 0;
+          // COMPONENT_ENABLED_STATE_DISABLED = 2,
+          // COMPONENT_ENABLED_STATE_DISABLED_USER = 3.
+          sawEnabledFalse = value == 2 || value == 3;
+        }
+      }
+    }
+    flush();
+
+    return apps;
+  }
+}
