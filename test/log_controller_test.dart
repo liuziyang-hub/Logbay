@@ -157,7 +157,7 @@ void main() {
 
       expect(log.liveLoggingInterrupted, isTrue);
       expect(log.logs.last.type, LogEntryType.error);
-      expect(log.logs.last.message, contains('disconnected'));
+      expect(log.logs.last.message, contains('已断开连接'));
       expect(
         log.logs.any((entry) => entry.message == 'before disconnect'),
         isTrue,
@@ -356,8 +356,11 @@ void main() {
       expect(log.filteredLogs, hasLength(1));
       expect(log.filteredLogs.single.pid, '101');
 
+      // Keyword (message) filters bypass the level gate so Debug/Info rows
+      // stay findable — raising the priority alone must not empty the match.
       log.setSelectedLogLevel(LogLevel.warning);
-      expect(log.filteredLogs, isEmpty);
+      expect(log.filteredLogs, hasLength(1));
+      expect(log.filteredLogs.single.pid, '101');
     },
   );
 
@@ -399,7 +402,7 @@ void main() {
   });
 
   test(
-    'message filter only matches the log message while tag filter is separate',
+    'message filter searches package/tag/message; tag filter stays tag-only',
     () {
       final log = createLog();
 
@@ -412,18 +415,29 @@ void main() {
           tag: 'NeedleTag',
           message: 'Different message',
         ),
+        LogEntry(
+          timestamp: '2026-04-26 10:00:01.000',
+          pid: '789',
+          tid: '012',
+          level: 'I',
+          tag: 'Other',
+          message: 'Unrelated payload',
+        ),
       ];
 
+      // Classic「消息」is Studio-style keyword: tag + package + message.
       log.applyFilters(
         LogFilters.fromFields(level: log.selectedLogLevel, message: 'needle'),
       );
-      expect(log.filteredLogs, isEmpty);
+      expect(log.filteredLogs, hasLength(1));
+      expect(log.filteredLogs.single.tag, 'NeedleTag');
 
       log.clearFilter();
       log.applyFilters(
         LogFilters.fromFields(level: log.selectedLogLevel, tag: 'needle'),
       );
       expect(log.filteredLogs, hasLength(1));
+      expect(log.filteredLogs.single.tag, 'NeedleTag');
     },
   );
 
@@ -495,8 +509,10 @@ void main() {
       );
 
       expect(log.selectedLogLevel, LogLevel.error);
-      expect(log.filteredLogs, hasLength(1));
-      expect(log.filteredLogs.single.level, 'E');
+      // Keyword terms bypass the level gate, so both Error and Info matches
+      // remain visible once package/tag/pid/message constraints match.
+      expect(log.filteredLogs, hasLength(2));
+      expect(log.filteredLogs.map((e) => e.level), containsAll(['E', 'I']));
       expect(log.classicFilter.messageController.text, 'signed in');
       expect(log.classicFilter.packageController.text, 'com.example.auth');
       expect(log.classicFilter.tagController.text, 'Auth');
@@ -863,6 +879,28 @@ void main() {
     },
   );
 
+  test('beginRowSelectionGesture auto-enables row selection mode', () {
+    final log = createLog();
+    log.logs = List.generate(
+      3,
+      (index) => testLogEntry(message: 'Message $index'),
+    );
+
+    expect(log.rowSelectionMode, isFalse);
+
+    final shouldSelect = log.beginRowSelectionGesture(1);
+
+    expect(shouldSelect, isTrue);
+    expect(log.rowSelectionMode, isTrue);
+    expect(log.selectedRowIndices, {1});
+
+    final shouldDeselect = log.beginRowSelectionGesture(1);
+
+    expect(shouldDeselect, isFalse);
+    expect(log.selectedRowIndices, isEmpty);
+    expect(log.rowSelectionMode, isFalse);
+  });
+
   test(
     'copyRowsForContextMenu copies selected rows when clicked row is selected',
     () async {
@@ -958,5 +996,37 @@ void main() {
     log.setSelectedRows({1, 2, 3});
 
     expect(log.selectedRowIndices, {1, 2, 3});
+  });
+
+  test('setColumnWidths does not notify when the widths are unchanged', () {
+    final log = createLog();
+    log.setColumnWidths({LogColumn.tag.name: 120});
+
+    var notifications = 0;
+    log.addListener(() => notifications++);
+
+    log.setColumnWidths({LogColumn.tag.name: 120});
+    expect(notifications, 0);
+
+    log.setColumnWidths({LogColumn.tag.name: 140});
+    expect(notifications, 1);
+    expect(log.columnWidths, {LogColumn.tag.name: 140});
+  });
+
+  test('setHiddenColumns does not notify when the columns are unchanged', () {
+    final log = createLog();
+    log.setHiddenColumns({LogColumn.pid.name});
+    final revision = log.logViewerRevision;
+
+    var notifications = 0;
+    log.addListener(() => notifications++);
+
+    log.setHiddenColumns({LogColumn.pid.name});
+    expect(notifications, 0);
+    expect(log.logViewerRevision, revision);
+
+    log.setHiddenColumns({LogColumn.pid.name, LogColumn.tag.name});
+    expect(notifications, 1);
+    expect(log.logViewerRevision, revision + 1);
   });
 }

@@ -6,6 +6,7 @@ import 'data/models/log_entry.dart';
 import 'services/log_file_service.dart';
 import '../../services/preferences_service.dart';
 import '../../session/device_session_controller.dart';
+import '../../data/device.dart';
 import 'log_controller.dart';
 
 /// Manages the ordered list of log tabs (live + imported) for one device
@@ -46,7 +47,7 @@ class LogSessionManager extends ChangeNotifier {
   String labelFor(int index) {
     final tab = _tabs[index];
     if (tab.isImported) {
-      final name = tab.importedFileName ?? 'Imported';
+      final name = tab.importedFileName ?? '导入的日志';
       final dot = name.lastIndexOf('.');
       return dot > 0 ? name.substring(0, dot) : name;
     }
@@ -127,7 +128,9 @@ class LogSessionManager extends ChangeNotifier {
 
   LogController _createLiveTab() => LogController(
     _session,
-    initialSettings: PreferencesService.defaultTabSettings,
+    initialSettings: PreferencesService.defaultTabSettingsFor(
+      isIos: _session.device is IosDevice,
+    ),
   );
 
   void _notify() {

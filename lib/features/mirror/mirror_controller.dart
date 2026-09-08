@@ -1,11 +1,12 @@
 import 'dart:async';
-import 'dart:typed_data';
 
+import 'package:flutter/services.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 
 import '../../data/device.dart';
 import '../../services/app_breadcrumbs.dart';
 import '../../services/device_session_repository.dart';
+import '../../services/tools/ios_mirror_tool.dart';
 import '../../session/feature_controller.dart';
 import '../../utils/utils.dart';
 import '../flutter_scrcpy/flutter_scrcpy.dart';
@@ -65,8 +66,18 @@ class MirrorController extends FeatureController {
   double paneWidth = 340;
 
   ScrcpyMirrorSession? _session;
+  IosMirrorSession? _iosSession;
   ScreenRecordingSession? _recordingSession;
   bool _disposed = false;
+  int _startGeneration = 0;
+
+  /// Whether device→desktop clipboard changes are mirrored automatically.
+  bool clipboardSyncEnabled = true;
+  StreamSubscription<String>? _clipboardSub;
+
+  /// When true, iOS serve-web is started with `--no-audio` (viewer muted).
+  /// Default false = audio on (CLI does not pass `--no-audio`).
+  bool iosAudioMuted = false;
 
   /// Number of consecutive automatic restarts (e.g. from rotation desyncs).
   /// Reset once a stream has survived longer than [_restartCooldown]; caps a
@@ -77,6 +88,14 @@ class MirrorController extends FeatureController {
   static const Duration _restartCooldown = Duration(seconds: 4);
 
   ScrcpyMirrorSession? get screenMirrorSession => _session;
+
+  /// iOS serve-web session (HEVC in system browser), if running.
+  IosMirrorSession? get iosMirrorSession => _iosSession;
+
+  /// Viewer URL for iOS mirror, or null when not running.
+  String? get iosViewerUrl => _iosSession?.viewerUrl;
+
+  bool get isIosMirror => device is IosDevice;
 
   /// Native texture id of the live mirror, or null when not running.
   int? get textureId => _session?.textureId;
@@ -100,13 +119,20 @@ class MirrorController extends FeatureController {
   }
 
   Future<void> start() async {
-    if (device is! AndroidDevice) {
-      screenMirrorError =
-          '屏幕镜像目前仅支持 Android 设备。';
-      screenMirrorState = ScreenMirrorState.unsupported;
-      _notify();
+    if (device is AndroidDevice) {
+      await _startAndroid();
       return;
     }
+    if (device is IosDevice) {
+      await _startIos();
+      return;
+    }
+    screenMirrorError = '此设备类型不支持屏幕镜像。';
+    screenMirrorState = ScreenMirrorState.unsupported;
+    _notify();
+  }
+
+  Future<void> _startAndroid() async {
     if (!isConnected) {
       screenMirrorError = '所选设备已断开连接。';
       screenMirrorState = ScreenMirrorState.error;
@@ -117,6 +143,7 @@ class MirrorController extends FeatureController {
     await stop(notify: false);
     if (_disposed) return;
 
+    final generation = ++_startGeneration;
     screenMirrorState = ScreenMirrorState.starting;
     screenMirrorError = null;
     AppBreadcrumbs.action(
@@ -130,7 +157,7 @@ class MirrorController extends FeatureController {
       final mirror = await service.startScreenMirror(
         options: mirrorQuality.toOptions(),
       );
-      if (_disposed) {
+      if (_disposed || generation != _startGeneration) {
         await mirror.stop();
         return;
       }
@@ -145,7 +172,9 @@ class MirrorController extends FeatureController {
       _notify();
       unawaited(_watchExit(mirror));
       unawaited(_watchStream(mirror));
+      _watchClipboard(mirror);
     } on ScrcpyMirrorException catch (error) {
+      if (generation != _startGeneration || _disposed) return;
       screenMirrorState = ScreenMirrorState.error;
       screenMirrorError = error.message;
       AppBreadcrumbs.action(
@@ -156,10 +185,12 @@ class MirrorController extends FeatureController {
       );
       _notify();
     } on UnsupportedError catch (error) {
+      if (generation != _startGeneration || _disposed) return;
       screenMirrorState = ScreenMirrorState.unsupported;
       screenMirrorError = error.message;
       _notify();
     } catch (error) {
+      if (generation != _startGeneration || _disposed) return;
       screenMirrorState = ScreenMirrorState.error;
       screenMirrorError = describeError(error);
       AppBreadcrumbs.action(
@@ -172,9 +203,114 @@ class MirrorController extends FeatureController {
     }
   }
 
+  Future<void> _startIos() async {
+    if (!isConnected) {
+      screenMirrorError = '所选设备已断开连接。';
+      screenMirrorState = ScreenMirrorState.error;
+      _notify();
+      return;
+    }
+
+    await stop(notify: false);
+    if (_disposed) return;
+
+    final generation = ++_startGeneration;
+    screenMirrorState = ScreenMirrorState.starting;
+    screenMirrorError = null;
+    AppBreadcrumbs.action(
+      'Starting iOS screen mirror for ${device.displayName}',
+      category: 'mirror',
+    );
+    _notify();
+
+    try {
+      final available = await IosMirrorTool.isAvailable();
+      if (!available) {
+        throw IosMirrorException(
+          '未找到 pymobiledevice3。请在 Python 环境中安装该工具，'
+          '并完成开发者镜像挂载后再试。',
+        );
+      }
+
+      final mirror = await service.startIosScreenMirror(noAudio: iosAudioMuted);
+      if (_disposed || generation != _startGeneration) {
+        await mirror.stop();
+        return;
+      }
+
+      _iosSession = mirror;
+      _sessionStartedAt = DateTime.now();
+      screenMirrorState = ScreenMirrorState.running;
+      AppBreadcrumbs.action(
+        'iOS screen mirror running for ${device.displayName}',
+        category: 'mirror',
+      );
+      _notify();
+
+      // Open the upstream WebCodecs viewer (includes touch controls).
+      try {
+        await mirror.openViewer();
+      } catch (_) {
+        // Viewer open is best-effort; session stays alive.
+      }
+
+      unawaited(_watchIosExit(mirror, generation));
+    } on IosMirrorException catch (error) {
+      if (generation != _startGeneration || _disposed) return;
+      screenMirrorState = ScreenMirrorState.error;
+      screenMirrorError = error.message;
+      _notify();
+    } on UnsupportedError catch (error) {
+      if (generation != _startGeneration || _disposed) return;
+      screenMirrorState = ScreenMirrorState.unsupported;
+      screenMirrorError = error.message;
+      _notify();
+    } catch (error) {
+      if (generation != _startGeneration || _disposed) return;
+      screenMirrorState = ScreenMirrorState.error;
+      screenMirrorError = describeError(error);
+      _notify();
+    }
+  }
+
+  Future<void> openIosViewer() async {
+    final session = _iosSession;
+    if (session == null) return;
+    await session.openViewer();
+  }
+
+  /// Toggles iOS mirror mute (`--no-audio`). Restarts a live session so the
+  /// CLI flag takes effect.
+  Future<void> setIosAudioMuted(bool muted) async {
+    if (iosAudioMuted == muted) return;
+    iosAudioMuted = muted;
+    _notify();
+    if (isIosMirror && isScreenMirrorRunning) {
+      await start();
+    }
+  }
+
+  Future<void> _watchIosExit(IosMirrorSession mirror, int generation) async {
+    final code = await mirror.exitCode;
+    if (_disposed || generation != _startGeneration) return;
+    if (!identical(_iosSession, mirror)) return;
+    _iosSession = null;
+    if (screenMirrorState == ScreenMirrorState.running ||
+        screenMirrorState == ScreenMirrorState.starting) {
+      screenMirrorState = ScreenMirrorState.error;
+      screenMirrorError = 'iOS 镜像进程已退出（退出码 $code）。';
+      _notify();
+    }
+  }
+
   Future<void> stop({bool notify = true}) async {
+    _startGeneration++;
     final mirror = _session;
     _session = null;
+    final ios = _iosSession;
+    _iosSession = null;
+    await _clipboardSub?.cancel();
+    _clipboardSub = null;
 
     if (mirror != null) {
       await mirror.stop();
@@ -183,8 +319,18 @@ class MirrorController extends FeatureController {
         category: 'mirror',
       );
     }
+    if (ios != null) {
+      await ios.stop();
+      AppBreadcrumbs.action(
+        'Stopped iOS screen mirror for ${device.displayName}',
+        category: 'mirror',
+      );
+    }
 
-    if (_disposed) return;
+    if (_recordingSession != null) {
+      await cancelRecording();
+    }
+
     screenMirrorState = ScreenMirrorState.stopped;
     screenMirrorError = null;
     if (notify) _notify();
@@ -233,7 +379,7 @@ class MirrorController extends FeatureController {
         : ScreenMirrorState.error;
     screenMirrorError = exitCode == 0
         ? null
-        : 'scrcpy 退出，代码 $exitCode。';
+        : '屏幕镜像已停止（退出码 $exitCode）。';
     _notify();
   }
 
@@ -260,6 +406,40 @@ class MirrorController extends FeatureController {
     _session?.control?.key(key);
   }
 
+  /// Listens for device clipboard changes and mirrors them to the desktop
+  /// clipboard, while [clipboardSyncEnabled] is on.
+  void _watchClipboard(ScrcpyMirrorSession mirror) {
+    final control = mirror.control;
+    if (control == null) return;
+    _clipboardSub = control.onDeviceClipboardChanged.listen((text) {
+      if (!clipboardSyncEnabled || text.isEmpty) return;
+      unawaited(Clipboard.setData(ClipboardData(text: text)));
+    });
+  }
+
+  /// Toggles automatic device→desktop clipboard mirroring.
+  void setClipboardSyncEnabled(bool enabled) {
+    if (enabled == clipboardSyncEnabled) return;
+    clipboardSyncEnabled = enabled;
+    _notify();
+  }
+
+  /// Whether pasting from the desktop clipboard is currently possible.
+  bool get canPasteToDevice =>
+      isScreenMirrorRunning && _session?.control != null;
+
+  /// Sends the desktop clipboard's text to the mirrored device and pastes it
+  /// into the focused field. No-op when there's no live control channel or
+  /// the clipboard has no text.
+  Future<void> pasteFromClipboard() async {
+    final control = _session?.control;
+    if (control == null) return;
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text;
+    if (text == null || text.isEmpty) return;
+    control.setClipboard(text, paste: true);
+  }
+
   /// Switches the encoder quality preset. Restarts the live stream so the new
   /// resolution/bitrate take effect.
   Future<void> setQuality(MirrorQuality quality) async {
@@ -271,21 +451,24 @@ class MirrorController extends FeatureController {
     }
   }
 
-  /// Captures a PNG screenshot of the mirrored device, or null if unavailable.
+  /// Captures a PNG screenshot (Android screencap or iOS pmd3 / idevice).
   Future<Uint8List?> captureScreenshot() async {
-    if (_session == null) return null;
+    if (!isConnected) return null;
+    if (device is! AndroidDevice && device is! IosDevice) return null;
     return service.captureScreenshot();
   }
 
   /// Cycles the mirrored device's display orientation.
   Future<void> rotate() async {
-    if (_session == null) return;
+    if (device is! AndroidDevice || !isConnected) return;
     await service.rotateDevice();
   }
 
-  /// Begins recording the mirrored device's screen on-device.
+  /// Begins on-device screenrecord (does not require an active mirror session).
   Future<void> startRecording() async {
-    if (_session == null || _recordingSession != null) return;
+    if (device is! AndroidDevice || !isConnected || _recordingSession != null) {
+      return;
+    }
     _recordingSession = await service.startScreenRecording();
     _notify();
   }

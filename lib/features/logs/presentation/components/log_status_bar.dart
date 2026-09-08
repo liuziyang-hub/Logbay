@@ -53,7 +53,7 @@ class LogStatusBar extends StatelessWidget {
           if (controller.rowSelectionMode || controller.hasSelectedRows) ...[
             const Gap(16),
             Text(
-              '已选择: ${controller.selectedRowCount}',
+              '已选 ${controller.selectedRowCount} 行',
               style: theme.statusBarStyle,
             ),
           ],

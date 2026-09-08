@@ -12,6 +12,8 @@ import '../features/device_info/device_info_controller.dart';
 import '../features/file_manager/file_manager_controller.dart';
 import '../features/logs/log_session_manager.dart';
 import '../features/mirror/mirror_controller.dart';
+import '../features/terminal/terminal_session_manager.dart';
+import '../features/utilities/utilities_controller.dart';
 import '../services/app_breadcrumbs.dart';
 import '../services/app_install_service.dart';
 import '../services/device_session_repository.dart';
@@ -98,6 +100,8 @@ class DeviceSessionController extends ChangeNotifier {
   AppsController? _appsController;
   DeviceInfoController? _deviceInfoController;
   AdbShellController? _adbShellController;
+  TerminalSessionManager? _terminalSessionManager;
+  UtilitiesController? _utilitiesController;
 
   bool _homeOpen = true;
   bool _logsOpen = false;
@@ -107,6 +111,8 @@ class DeviceSessionController extends ChangeNotifier {
   bool _appsOpen = false;
   bool _deviceInfoOpen = false;
   bool _adbShellOpen = false;
+  bool _terminalOpen = false;
+  bool _utilitiesOpen = false;
   bool _activated = false;
   bool _disposed = false;
 
@@ -120,6 +126,8 @@ class DeviceSessionController extends ChangeNotifier {
   bool get isAppsOpen => _appsOpen;
   bool get isDeviceInfoOpen => _deviceInfoOpen;
   bool get isAdbShellOpen => _adbShellOpen;
+  bool get isTerminalOpen => _terminalOpen;
+  bool get isUtilitiesOpen => _utilitiesOpen;
   bool get isLogsOpen => _logsOpen;
   bool get isHomeOpen => _homeOpen;
   bool get isActivated => _activated;
@@ -134,13 +142,16 @@ class DeviceSessionController extends ChangeNotifier {
         !_filesOpen &&
         !_appsOpen &&
         !_deviceInfoOpen &&
-        !_adbShellOpen) {
+        !_adbShellOpen &&
+        !_terminalOpen &&
+        !_utilitiesOpen) {
       _homeOpen = true;
     }
   }
 
   /// Whether this device can be screen-mirrored right now.
-  bool get canMirror => _device is AndroidDevice && _device.isConnected;
+  bool get canMirror =>
+      (_device is AndroidDevice || _device is IosDevice) && _device.isConnected;
 
   /// Whether crash reports can be read for this device (iOS only).
   bool get canReadCrashReports => _device is IosDevice;
@@ -153,8 +164,18 @@ class DeviceSessionController extends ChangeNotifier {
   /// platforms, when connected).
   bool get canManageApps => _device.isConnected;
 
-  /// Interactive ADB shell — Android + connected only.
+  /// Interactive ADB shell (xterm) — kept for gradual migration; not shown
+  /// on the rail. Prefer [canUseTerminal] / [openTerminal].
   bool get canAdbShell => _device is AndroidDevice && _device.isConnected;
+
+  /// Terminal pane — any real device session (Android shell + iOS tools).
+  /// Excludes the imported-logs workspace.
+  bool get canUseTerminal => !isImportedWorkspace;
+
+  /// Whether the Utilities feature has anything to offer this device. The
+  /// pane itself stays usable while disconnected (commands are just disabled),
+  /// so this only excludes the device-less imported-logs workspace.
+  bool get canRunUtilities => !isImportedWorkspace;
 
   /// Device details pane — any connected device (iOS shows limited fields).
   bool get canShowDeviceInfo => _device.isConnected;
@@ -183,6 +204,33 @@ class DeviceSessionController extends ChangeNotifier {
 
   AdbShellController get adbShellController =>
       _adbShellController ??= AdbShellController(this);
+
+  TerminalSessionManager get terminalSessionManager =>
+      _terminalSessionManager ??= TerminalSessionManager(session: this);
+
+  UtilitiesController get utilitiesController =>
+      _utilitiesController ??= UtilitiesController(this);
+
+  /// Screencap / iOS screenshot — does not require the mirror pane to be open.
+  Future<Uint8List?> captureScreenshot() async {
+    if (!isConnected) return null;
+    if (platform != DevicePlatform.android && platform != DevicePlatform.ios) {
+      return null;
+    }
+    return mirrorController.captureScreenshot();
+  }
+
+  /// Starts on-device screenrecord (Android).
+  Future<void> startScreenRecording() async {
+    if (platform != DevicePlatform.android || !isConnected) return;
+    await mirrorController.startRecording();
+  }
+
+  Future<void> stopScreenRecording(String localPath) async {
+    await mirrorController.stopRecording(localPath);
+  }
+
+  bool get isScreenRecording => _mirrorController?.isRecording ?? false;
 
   void openHome() {
     if (_homeOpen) return;
@@ -380,6 +428,46 @@ class DeviceSessionController extends ChangeNotifier {
   void toggleAdbShell() =>
       _adbShellOpen && !_homeOpen ? closeAdbShell() : openAdbShell();
 
+  void openTerminal() {
+    final viewChanged = _homeOpen || !_terminalOpen;
+    _terminalOpen = true;
+    _homeOpen = false;
+    if (viewChanged) {
+      _navigate('终端');
+      _notify();
+    }
+  }
+
+  void closeTerminal() {
+    if (!_terminalOpen) return;
+    _terminalOpen = false;
+    _ensureSelection();
+    _notify();
+  }
+
+  void toggleTerminal() =>
+      _terminalOpen && !_homeOpen ? closeTerminal() : openTerminal();
+
+  void openUtilities() {
+    final viewChanged = _homeOpen || !_utilitiesOpen;
+    _utilitiesOpen = true;
+    _homeOpen = false;
+    if (viewChanged) {
+      _navigate('工具');
+      _notify();
+    }
+  }
+
+  void closeUtilities() {
+    if (!_utilitiesOpen) return;
+    _utilitiesOpen = false;
+    _ensureSelection();
+    _notify();
+  }
+
+  void toggleUtilities() =>
+      _utilitiesOpen && !_homeOpen ? closeUtilities() : openUtilities();
+
   // ── App install (device-level) ──────────────────────────────────────────
   bool _isInstallingApp = false;
   String? _installingAppName;
@@ -389,10 +477,7 @@ class DeviceSessionController extends ChangeNotifier {
 
   Future<AppInstallResult> installAppFromPicker() async {
     if (!isConnected) {
-      return AppInstallResult.failure(
-        device: device,
-        error: '安装应用前请先重新连接设备。',
-      );
+      return AppInstallResult.failure(device: device, error: '安装应用前请先重新连接设备。');
     }
 
     final selection = await AppInstallService.pickInstallable(device);
@@ -419,9 +504,7 @@ class DeviceSessionController extends ChangeNotifier {
       return AppInstallResult.failure(error: '未拖放可安装的应用。');
     }
     if (normalizedPaths.length > 1) {
-      return AppInstallResult.failure(
-        error: '请一次只拖放一个应用安装包。',
-      );
+      return AppInstallResult.failure(error: '请一次只拖放一个应用安装包。');
     }
 
     return installAppFromPath(normalizedPaths.single);
@@ -440,8 +523,7 @@ class DeviceSessionController extends ChangeNotifier {
       return AppInstallResult.failure(
         fileName: fileName,
         device: device,
-        error:
-            '设备已断开连接。安装 $fileName 前请先重新连接。',
+        error: '设备已断开连接。安装 $fileName 前请先重新连接。',
       );
     }
 
@@ -523,9 +605,7 @@ class DeviceSessionController extends ChangeNotifier {
         .toList(growable: false);
     if (normalizedPaths.isEmpty) return null;
     if (!isConnected) {
-      return DropHandlingResult(
-        errors: ['拖放文件前请先重新连接 ${device.displayName}。'],
-      );
+      return DropHandlingResult(errors: ['拖放文件前请先重新连接 ${device.displayName}。']);
     }
 
     final toInstall = <String>[];
@@ -568,9 +648,7 @@ class DeviceSessionController extends ChangeNotifier {
         if (result.isSuccess) {
           installed.add(result.fileName ?? extractFileName(path));
         } else if (!result.cancelled) {
-          errors.add(
-            result.error ?? '安装 ${extractFileName(path)} 失败。',
-          );
+          errors.add(result.error ?? '安装 ${extractFileName(path)} 失败。');
         }
       }
 
@@ -617,6 +695,8 @@ class DeviceSessionController extends ChangeNotifier {
     _appsController?.dispose();
     _deviceInfoController?.dispose();
     _adbShellController?.dispose();
+    _terminalSessionManager?.dispose();
+    _utilitiesController?.dispose();
     unawaited(service.dispose());
     super.dispose();
   }

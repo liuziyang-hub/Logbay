@@ -37,6 +37,10 @@ class LogEntry {
   final String message;
   String? packageName;
   String? processName;
+  /// iOS unified logging (`os_trace`) subsystem, when present.
+  final String? subsystem;
+  /// iOS unified logging category, when present.
+  final String? category;
   final DateTime? _referenceTime;
 
   LogEntry({
@@ -51,6 +55,8 @@ class LogEntry {
     required this.message,
     this.packageName,
     this.processName,
+    this.subsystem,
+    this.category,
     DateTime? now,
   }) : id = id ?? LogEntryIdGenerator.instance.next(),
        _referenceTime = now;
@@ -68,6 +74,8 @@ class LogEntry {
     message,
     if (packageName != null && packageName!.trim().isNotEmpty) packageName,
     if (processName != null && processName!.trim().isNotEmpty) processName,
+    if (subsystem != null && subsystem!.trim().isNotEmpty) subsystem,
+    if (category != null && category!.trim().isNotEmpty) category,
   ].join(' ').toLowerCase();
 
   /// [timestamp] parsed into a local [DateTime], or null when the format
@@ -158,6 +166,8 @@ class LogEntry {
       message,
       packageName,
       processName,
+      subsystem,
+      category,
     );
   }
 
@@ -174,6 +184,8 @@ class LogEntry {
         other.tag == tag &&
         other.message == message &&
         other.packageName == packageName &&
-        other.processName == processName;
+        other.processName == processName &&
+        other.subsystem == subsystem &&
+        other.category == category;
   }
 }

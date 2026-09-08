@@ -25,7 +25,8 @@ class _HomeLakeBackgroundState extends State<HomeLakeBackground> {
   late final Player _player = Player(
     configuration: const PlayerConfiguration(
       muted: true,
-      bufferSize: 32 * 1024 * 1024,
+      // Looping atmosphere clips are ~1–5MB; 4MB buffer is enough and cuts peak RAM.
+      bufferSize: 4 * 1024 * 1024,
       logLevel: MPVLogLevel.error,
     ),
   );

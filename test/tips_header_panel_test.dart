@@ -11,15 +11,15 @@ const _tips = [
   Tip(
     id: 'a',
     icon: Icons.view_column_outlined,
-    title: 'Hide columns you don\'t use',
-    detail: 'Right-click any column header to hide or show columns.',
-    actionHint: 'Right-click a column header',
+    title: '隐藏不常用的列',
+    detail: '右键点击任意列标题即可显示或隐藏各列。',
+    actionHint: '在日志视图中右键点击列标题',
   ),
 ];
 
 const _twoTips = [
-  Tip(id: 'a', icon: Icons.abc, title: 'First tip', detail: 'detail a'),
-  Tip(id: 'b', icon: Icons.abc, title: 'Second tip', detail: 'detail b'),
+  Tip(id: 'a', icon: Icons.abc, title: '第一条提示', detail: '详情甲'),
+  Tip(id: 'b', icon: Icons.abc, title: '第二条提示', detail: '详情乙'),
 ];
 
 Widget _host(TipsController controller) {
@@ -54,7 +54,7 @@ void main() {
 
     await tester.pumpWidget(_host(controller));
 
-    expect(find.text('Hide columns you don\'t use'), findsOneWidget);
+    expect(find.text('隐藏不常用的列'), findsOneWidget);
   });
 
   testWidgets('hides on a narrow window', (tester) async {
@@ -66,7 +66,7 @@ void main() {
 
     await tester.pumpWidget(_host(controller));
 
-    expect(find.text('Hide columns you don\'t use'), findsNothing);
+    expect(find.text('隐藏不常用的列'), findsNothing);
   });
 
   testWidgets('close button hides it for the session', (tester) async {
@@ -75,10 +75,10 @@ void main() {
     addTearDown(controller.dispose);
 
     await tester.pumpWidget(_host(controller));
-    await tester.tap(find.byTooltip('Hide tip'));
+    await tester.tap(find.byTooltip('隐藏提示'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Hide columns you don\'t use'), findsNothing);
+    expect(find.text('隐藏不常用的列'), findsNothing);
     expect(controller.visible, isFalse);
   });
 
@@ -88,15 +88,12 @@ void main() {
     addTearDown(controller.dispose);
 
     await tester.pumpWidget(_host(controller));
-    await tester.tap(find.text('Hide columns you don\'t use'));
+    await tester.tap(find.text('隐藏不常用的列'));
     await tester.pumpAndSettle();
 
-    expect(
-      find.text('Right-click any column header to hide or show columns.'),
-      findsOneWidget,
-    );
-    expect(find.text('Right-click a column header'), findsOneWidget);
-    expect(find.text('Got it'), findsOneWidget);
+    expect(find.text('右键点击任意列标题即可显示或隐藏各列。'), findsOneWidget);
+    expect(find.text('在日志视图中右键点击列标题'), findsOneWidget);
+    expect(find.text('知道了'), findsOneWidget);
   });
 
   testWidgets('detail dialog chevrons browse the tip pool in place', (
@@ -107,24 +104,24 @@ void main() {
     addTearDown(controller.dispose);
 
     await tester.pumpWidget(_host(controller));
-    await tester.tap(find.text('First tip'));
+    await tester.tap(find.text('第一条提示'));
     await tester.pumpAndSettle();
 
     // The dialog opens on the same tip the pill displayed.
-    expect(find.text('detail a'), findsOneWidget);
+    expect(find.text('详情甲'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('Next tip'));
+    await tester.tap(find.byTooltip('下一条提示'));
     await tester.pumpAndSettle();
-    expect(find.text('detail b'), findsOneWidget);
+    expect(find.text('详情乙'), findsOneWidget);
 
     // Wraps around, and backwards too.
-    await tester.tap(find.byTooltip('Next tip'));
+    await tester.tap(find.byTooltip('下一条提示'));
     await tester.pumpAndSettle();
-    expect(find.text('detail a'), findsOneWidget);
+    expect(find.text('详情甲'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('Previous tip'));
+    await tester.tap(find.byTooltip('上一条提示'));
     await tester.pumpAndSettle();
-    expect(find.text('detail b'), findsOneWidget);
+    expect(find.text('详情乙'), findsOneWidget);
 
     // Browsing in the dialog also moves the pill behind it.
     expect(controller.currentTip?.id, 'b');
@@ -138,11 +135,11 @@ void main() {
     addTearDown(controller.dispose);
 
     await tester.pumpWidget(_host(controller));
-    await tester.tap(find.text('Hide columns you don\'t use'));
+    await tester.tap(find.text('隐藏不常用的列'));
     await tester.pumpAndSettle();
 
-    expect(find.byTooltip('Previous tip'), findsNothing);
-    expect(find.byTooltip('Next tip'), findsNothing);
+    expect(find.byTooltip('上一条提示'), findsNothing);
+    expect(find.byTooltip('下一条提示'), findsNothing);
   });
 
   testWidgets('three-dot menu can turn tips off behind a confirmation', (
@@ -155,21 +152,21 @@ void main() {
     await tester.pumpWidget(_host(controller));
 
     // Open the ⋮ menu.
-    await tester.tap(find.byTooltip('Tip options'));
+    await tester.tap(find.byTooltip('提示选项'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Turn off tips…'));
+    await tester.tap(find.text('关闭提示…'));
     await tester.pumpAndSettle();
 
     // The confirmation guard appears; nothing has changed yet.
-    expect(find.text('Turn off tips?'), findsOneWidget);
+    expect(find.text('关闭提示？'), findsOneWidget);
     expect(controller.enabled, isTrue);
 
     // Confirm.
-    await tester.tap(find.widgetWithText(FilledButton, 'Turn off'));
+    await tester.tap(find.widgetWithText(FilledButton, '关闭'));
     await tester.pumpAndSettle();
 
     expect(controller.enabled, isFalse);
-    expect(find.text('Hide columns you don\'t use'), findsNothing);
+    expect(find.text('隐藏不常用的列'), findsNothing);
     expect(PreferencesService.tipsEnabled, isFalse);
   });
 
@@ -180,14 +177,14 @@ void main() {
 
     await tester.pumpWidget(_host(controller));
 
-    await tester.tap(find.byTooltip('Tip options'));
+    await tester.tap(find.byTooltip('提示选项'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Turn off tips…'));
+    await tester.tap(find.text('关闭提示…'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.tap(find.widgetWithText(TextButton, '取消'));
     await tester.pumpAndSettle();
 
     expect(controller.enabled, isTrue);
-    expect(find.text('Hide columns you don\'t use'), findsOneWidget);
+    expect(find.text('隐藏不常用的列'), findsOneWidget);
   });
 }

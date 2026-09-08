@@ -72,11 +72,42 @@ void main() {
       expect(controller!.suggestedWirelessConnectAddress, '192.168.0.10:37112');
       expect(
         controller!.wirelessMessage,
-        contains('Found 2 wireless ADB services'),
+        contains('发现 2 个无线 ADB 服务'),
       );
       expect(controller!.wirelessError, isNull);
     },
   );
+
+  test('startQrPairing works while background mDNS discovery is busy', () async {
+    final discoveryGate = Completer<void>();
+    adbTool.discoveryGate = discoveryGate;
+    adbTool.discoveryResult = WirelessServiceDiscoveryResult.success(
+      services: const [],
+    );
+
+    controller = _buildController(
+      repository: repository,
+      sessionService: sessionService,
+    );
+
+    // Simulate dialog auto-discover hanging with empty results.
+    final discoveryFuture = controller!.discoverWirelessServices();
+    await Future<void>.delayed(Duration.zero);
+    expect(controller!.isDiscoveringWireless, isTrue);
+    expect(controller!.isWirelessBusy, isTrue);
+    expect(controller!.canStartQrPairing, isTrue);
+
+    final qrFuture = controller!.startQrPairing();
+    expect(controller!.qrSession, isNotNull);
+    expect(controller!.qrSession!.payload, startsWith('WIFI:T:ADB;S:logbay-'));
+    expect(controller!.isWaitingForQrScan, isTrue);
+
+    controller!.cancelQrPairing();
+    discoveryGate.complete();
+    await discoveryFuture;
+    expect(await qrFuture, isNull);
+    expect(controller!.qrSession, isNull);
+  });
 
   test(
     'connectWirelessDevice reuses an already connected wireless device',
@@ -108,9 +139,9 @@ void main() {
       );
 
       expect(result.isSuccess, isTrue);
-      expect(result.message, contains('already connected'));
+      expect(result.message, contains('无线设备已连接'));
       expect(selectedDeviceId, '192.168.0.117:37251');
-      expect(sessionService.connectRequests, isEmpty);
+      expect(adbTool.connectRequests, isEmpty);
     },
   );
 
@@ -166,7 +197,7 @@ void main() {
       expect(activatedDeviceId, connectAddress);
       expect(adbTool.pairRequests.single, ('192.168.0.77:40000', '123456'));
       expect(adbTool.connectRequests, [connectAddress]);
-      expect(result.message, contains('Live logs are ready in this tab'));
+      expect(result.message, contains('此标签页中的实时日志已就绪'));
     },
   );
 }
@@ -222,6 +253,7 @@ class _FakeWirelessAdbTool extends AdbTool {
   List<Device> androidDevices = const [];
   WirelessServiceDiscoveryResult discoveryResult =
       const WirelessServiceDiscoveryResult();
+  Completer<void>? discoveryGate;
   final StreamController<List<Device>> _watchController =
       StreamController<List<Device>>.broadcast();
   final List<(String, String)> pairRequests = [];
@@ -247,6 +279,10 @@ class _FakeWirelessAdbTool extends AdbTool {
 
   @override
   Future<WirelessServiceDiscoveryResult> discoverMdnsServices() async {
+    final gate = discoveryGate;
+    if (gate != null && !gate.isCompleted) {
+      await gate.future;
+    }
     return discoveryResult;
   }
 

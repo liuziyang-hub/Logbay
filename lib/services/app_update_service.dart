@@ -7,16 +7,13 @@ import 'package:path_provider/path_provider.dart';
 
 /// GitHub-releases-backed update source consumed by `UpdatWidget`.
 ///
-/// It reads the latest published release from the GitHub API and maps it onto
-/// the stable-named artifacts produced by the release workflow
-/// (`.github/workflows/release.yml`): `eagly-macos.dmg`,
-/// `eagly-windows-setup.exe`, and `eagly-linux.deb`. Because those names are
-/// identical on every release, the download URL only needs the tag.
+/// Reads the latest published release from the GitHub API and maps it onto
+/// Logbay installer artifacts (`Logbay-{version}-windows-setup.exe`, etc.).
 class AppUpdateService {
   const AppUpdateService._();
 
-  /// Auto-update is disabled for the Logbay fork (no public release channel).
-  static bool get isSupported => false;
+  /// Enabled for the public Logbay GitHub release channel.
+  static bool get isSupported => true;
 
   static const _latestReleaseApi =
       'https://api.github.com/repos/${AppConstants.repoOwner}/'
@@ -28,10 +25,7 @@ class AppUpdateService {
     'User-Agent': '${AppConstants.repoName}-app',
   };
 
-  /// Latest published release as a bare semantic version (leading `v` stripped),
-  /// e.g. `1.1.6`. `updat` parses this with `pub_semver`, which rejects a `v`
-  /// prefix. Returns `null` when the payload can't be understood so the widget
-  /// stays quiet instead of surfacing an error.
+  /// Latest published release as a bare semantic version (leading `v` stripped).
   static Future<String?> getLatestVersion() async {
     if (!isSupported) return null;
     final res = await http.get(Uri.parse(_latestReleaseApi), headers: _headers);
@@ -54,18 +48,21 @@ class AppUpdateService {
     return body is String && body.trim().isNotEmpty ? body : null;
   }
 
-  /// Download URL of this platform's installer for [version] — the bare semver
-  /// handed back by [getLatestVersion]. Release tags follow the `v<semver>`
-  /// convention (`release.yml` triggers on `v*`), so the tag is `v$version`.
+  /// Download URL of this platform's installer for [version].
   static Future<String> getBinaryUrl(String? version) async {
-    return '${AppConstants.repoUrl}/releases/download/v$version/$_assetName';
+    return '${AppConstants.repoUrl}/releases/download/v$version/'
+        '${assetFileName(version)}';
+  }
+
+  /// Stable installer file name for [version] on the current platform.
+  static String assetFileName(String? version) {
+    final v = version ?? '0.0.0';
+    if (Platform.isMacOS) return 'Logbay-$v-macos.dmg';
+    if (Platform.isWindows) return 'Logbay-$v-windows-setup.exe';
+    return 'Logbay-$v-linux.deb';
   }
 
   /// The stable download location shared with `updat`.
-  ///
-  /// Keeping the location under our control lets us launch the installer only
-  /// after this process has quit, rather than opening it while Logbay still has
-  /// its application bundle in use.
   static Future<File> getDownloadFileLocation(String? version) async {
     final downloadsDirectory = await getDownloadsDirectory();
     if (downloadsDirectory == null) {
@@ -73,13 +70,14 @@ class AppUpdateService {
     }
     return File(
       '${downloadsDirectory.path}${Platform.pathSeparator}'
-      '${AppConstants.appName}-$version.$_assetExtension',
+      '${assetFileName(version)}',
     );
   }
 
-  /// Schedules the downloaded installer to open after Logbay has exited, then
-  /// terminates this process. This prevents a macOS DMG from asking the user to
-  /// replace an app bundle that is still running.
+  /// Quits Logbay and launches the installer.
+  ///
+  /// On Windows the Inno Setup package is started with silent overwrite flags
+  /// so the user does not need to click through the wizard.
   static Future<void> quitAndOpenInstaller(String version) async {
     final installer = await getDownloadFileLocation(version);
     if (!await installer.exists()) {
@@ -87,16 +85,25 @@ class AppUpdateService {
     }
 
     if (Platform.isWindows) {
+      final ps = StringBuffer()
+        ..write('param([int]\$appProcessId, [string]\$installerPath) { ')
+        ..write(
+          'while (Get-Process -Id \$appProcessId '
+          '-ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 100 }; ',
+        )
+        ..write(
+          'Start-Process -FilePath \$installerPath -ArgumentList '
+          "'/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"
+          "'/CLOSEAPPLICATIONS','/FORCECLOSEAPPLICATIONS' ",
+        )
+        ..write('}');
       await Process.start('powershell.exe', [
         '-NoProfile',
         '-NonInteractive',
         '-WindowStyle',
         'Hidden',
         '-Command',
-        'param([int]\$appProcessId, [string]\$installerPath) '
-            '{ while (Get-Process -Id \$appProcessId '
-            '-ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 100 }; '
-            'Start-Process -FilePath \$installerPath }',
+        ps.toString(),
         '$pid',
         installer.path,
       ], mode: ProcessStartMode.detached);
@@ -106,7 +113,7 @@ class AppUpdateService {
         '-c',
         'while kill -0 "\$1" 2>/dev/null; do sleep 0.1; done; '
             '"\$2" "\$3"',
-        'eagly-updater',
+        'logbay-updater',
         '$pid',
         opener,
         installer.path,
@@ -115,14 +122,6 @@ class AppUpdateService {
 
     exit(0);
   }
-
-  static String get _assetName {
-    if (Platform.isMacOS) return 'eagly-macos.dmg';
-    if (Platform.isWindows) return 'eagly-windows-setup.exe';
-    return 'eagly-linux.deb';
-  }
-
-  static String get _assetExtension => _assetName.split('.').last;
 
   static String _stripV(String tag) =>
       tag.startsWith('v') || tag.startsWith('V') ? tag.substring(1) : tag;

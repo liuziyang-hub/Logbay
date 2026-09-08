@@ -94,12 +94,10 @@ void main() {
 
     await pumpInlineFilterBar(tester, controller: controller);
 
-    expect(find.text('Level'), findsOneWidget);
-    expect(find.byType(DropdownButtonFormField<LogLevel>), findsOneWidget);
-
-    await tester.tap(find.byType(DropdownButtonFormField<LogLevel>));
+    expect(find.text('优先级'), findsOneWidget);
+    await tester.tap(find.text('优先级'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Error (E)').last);
+    await tester.tap(find.textContaining('错误').last);
     await tester.pumpAndSettle();
 
     expect(controller.selectedLevel, LogLevel.error);
@@ -368,15 +366,15 @@ void main() {
 
     await pumpInlineFilterBar(tester, controller: controller);
 
-    expect(find.byTooltip('Show filter help'), findsOneWidget);
+    expect(find.byTooltip('显示筛选帮助'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('Show filter help'));
+    await tester.tap(find.byTooltip('显示筛选帮助'));
     await tester.pumpAndSettle();
 
-    expect(find.byTooltip('Hide filter help'), findsOneWidget);
+    expect(find.byTooltip('隐藏筛选帮助'), findsOneWidget);
     expect(find.byKey(const ValueKey('inline-filter-help')), findsOneWidget);
     expect(
-      find.textContaining('Bare words search the whole log entry'),
+      find.textContaining('直接输入词语可在整条日志中搜索'),
       findsOneWidget,
     );
   });

@@ -98,6 +98,7 @@ class WirelessConnectionController extends ChangeNotifier {
   WirelessQrPairingSession? _qrSession;
   var _waitingForQrScan = false;
   var _qrCancelled = false;
+  var _iosWifiBusy = false;
 
   static const Duration _qrScanPollInterval = Duration(milliseconds: 1200);
   static const Duration _qrScanTimeout = Duration(minutes: 3);
@@ -107,11 +108,20 @@ class WirelessConnectionController extends ChangeNotifier {
   bool get isConnectingWireless => _connectingWireless;
   bool get isWaitingForQrScan => _waitingForQrScan;
   WirelessQrPairingSession? get qrSession => _qrSession;
+  bool get isIosWifiBusy => _iosWifiBusy;
   bool get isWirelessBusy =>
       _discoveringWireless ||
       _pairingWireless ||
       _connectingWireless ||
-      _waitingForQrScan;
+      _waitingForQrScan ||
+      _iosWifiBusy;
+
+  /// QR generation is independent of mDNS discovery — the dialog auto-starts
+  /// discovery on open, which can block for ~10s when no devices are found.
+  /// Pairing via QR only needs a code on screen immediately; mDNS polling for
+  /// the scanned service happens afterward in [_runQrPairingLoop].
+  bool get canStartQrPairing =>
+      !_pairingWireless && !_connectingWireless && !_waitingForQrScan;
   bool get hasAttemptedWirelessDiscovery => _hasAttemptedWirelessDiscovery;
   List<WirelessDebugService> get wirelessServices =>
       List.unmodifiable(_wirelessServices);
@@ -136,8 +146,7 @@ class WirelessConnectionController extends ChangeNotifier {
 
   Future<WirelessServiceDiscoveryResult> discoverWirelessServices() async {
     if (_pairingWireless || _connectingWireless || _waitingForQrScan) {
-      const error =
-          '请先完成当前无线 ADB 操作，再开始新的操作。';
+      const error = '请先完成当前无线 ADB 操作，再开始新的操作。';
       _wirelessError = error;
       _wirelessMessage = null;
       _notify();
@@ -156,11 +165,14 @@ class WirelessConnectionController extends ChangeNotifier {
 
       if (result.isSuccess) {
         _wirelessServices = result.services;
-        _wirelessError = null;
-        _wirelessMessage = result.services.isEmpty
-            ? '在本地网络未发现无线 ADB 服务。'
-            : '发现 ${result.services.length} 个无线 ADB 服务。';
-      } else {
+        // Keep the QR-scan instruction visible while waiting for a scan.
+        if (!_waitingForQrScan) {
+          _wirelessError = null;
+          _wirelessMessage = result.services.isEmpty
+              ? '在本地网络未发现无线 ADB 服务。'
+              : '发现 ${result.services.length} 个无线 ADB 服务。';
+        }
+      } else if (!_waitingForQrScan) {
         _wirelessServices = [];
         _wirelessMessage = null;
         _wirelessError = result.error;
@@ -195,8 +207,7 @@ class WirelessConnectionController extends ChangeNotifier {
       return WirelessPairResult.failure(error: error);
     }
     if (_discoveringWireless || _connectingWireless || _waitingForQrScan) {
-      const error =
-          '请先完成当前无线 ADB 操作，再进行配对。';
+      const error = '请先完成当前无线 ADB 操作，再进行配对。';
       _wirelessError = error;
       _wirelessMessage = null;
       _notify();
@@ -217,8 +228,7 @@ class WirelessConnectionController extends ChangeNotifier {
         return result.isSuccess
             ? WirelessPairResult.paired(message: result.message)
             : WirelessPairResult.failure(
-                error:
-                    result.error ?? '与 $normalizedAddress 配对失败。',
+                error: result.error ?? '与 $normalizedAddress 配对失败。',
               );
       }
 
@@ -244,8 +254,7 @@ class WirelessConnectionController extends ChangeNotifier {
       }
 
       if (resolvedConnectAddresses.isEmpty) {
-        final message =
-            '${result.message ?? '配对成功。'} 未能自动发现连接端点。';
+        final message = '${result.message ?? '配对成功。'} 未能自动发现连接端点。';
         _wirelessMessage = message;
         _wirelessError = null;
         return WirelessPairResult.paired(message: message);
@@ -259,9 +268,7 @@ class WirelessConnectionController extends ChangeNotifier {
       if (_disposed) {
         return connectResult.isSuccess
             ? WirelessPairResult.autoConnected(
-                message:
-                    connectResult.message ??
-                    '配对并连接成功。',
+                message: connectResult.message ?? '配对并连接成功。',
               )
             : WirelessPairResult.paired(
                 message: connectResult.error,
@@ -270,15 +277,13 @@ class WirelessConnectionController extends ChangeNotifier {
       }
 
       if (connectResult.isSuccess) {
-        final message =
-            connectResult.message ?? '配对并连接成功。';
+        final message = connectResult.message ?? '配对并连接成功。';
         _wirelessMessage = message;
         _wirelessError = null;
         return WirelessPairResult.autoConnected(message: message);
       }
 
-      final message =
-          '${result.message ?? '配对成功。'} 自动连接未能完成，您可以手动重试连接。';
+      final message = '${result.message ?? '配对成功。'} 自动连接未能完成，您可以手动重试连接。';
       _wirelessMessage = message;
       _wirelessError = null;
       return WirelessPairResult.paired(
@@ -300,9 +305,8 @@ class WirelessConnectionController extends ChangeNotifier {
   /// [qrSession] is populated synchronously before the first suspension so the
   /// UI can render the code immediately.
   Future<WirelessPairResult?> startQrPairing() {
-    if (isWirelessBusy) {
-      const error =
-          '请先完成当前无线 ADB 操作，再使用 QR 码配对。';
+    if (!canStartQrPairing) {
+      const error = '请先完成当前无线 ADB 操作，再使用 QR 码配对。';
       _wirelessError = error;
       _wirelessMessage = null;
       _notify();
@@ -345,7 +349,7 @@ class WirelessConnectionController extends ChangeNotifier {
     final deadline = DateTime.now().add(_qrScanTimeout);
     try {
       while (!_qrCancelled && !_disposed && DateTime.now().isBefore(deadline)) {
-        final discovery = await _devicesRepository.discoverMdnsServices();
+        final discovery = await _devicesRepository.discoverMdnsServicesOnce();
         if (_qrCancelled || _disposed) return null;
 
         final pairingService = discovery.services.firstWhereOrNull(
@@ -371,8 +375,7 @@ class WirelessConnectionController extends ChangeNotifier {
 
       if (_qrCancelled || _disposed) return null;
 
-      const error =
-          '等待扫描 QR 码超时。请生成新码后重试。';
+      const error = '等待扫描 QR 码超时。请生成新码后重试。';
       _wirelessMessage = null;
       _wirelessError = error;
       return WirelessPairResult.failure(error: error);
@@ -429,8 +432,7 @@ class WirelessConnectionController extends ChangeNotifier {
       return DeviceCommandResult.failure(error: error);
     }
     if (_discoveringWireless || _pairingWireless || _waitingForQrScan) {
-      const error =
-          '请先完成当前无线 ADB 操作，再连接设备。';
+      const error = '请先完成当前无线 ADB 操作，再连接设备。';
       _wirelessError = error;
       _wirelessMessage = null;
       _notify();
@@ -506,9 +508,7 @@ class WirelessConnectionController extends ChangeNotifier {
         host: host,
       );
       if (_disposed) {
-        return DeviceCommandResult.success(
-          message: '使用现有无线连接。',
-        );
+        return DeviceCommandResult.success(message: '使用现有无线连接。');
       }
       if (existingDevice != null) {
         final reusedResult = await _activateConnectedWirelessDevice(
@@ -696,8 +696,7 @@ class WirelessConnectionController extends ChangeNotifier {
     final selectedDeviceId = selectedDeviceIdProvider?.call();
     if ((isDeviceSelectedInAnotherTab?.call(matchedDevice.id) ?? false) &&
         selectedDeviceId != matchedDevice.id) {
-      final message =
-          '${prefixMessage ?? '无线设备已连接。'} 该设备已在其他标签页中打开。';
+      final message = '${prefixMessage ?? '无线设备已连接。'} 该设备已在其他标签页中打开。';
       return DeviceCommandResult.success(message: message);
     }
 
@@ -722,14 +721,10 @@ class WirelessConnectionController extends ChangeNotifier {
     List<String> failures,
   ) {
     if (addresses.length == 1) {
-      return failures.isNotEmpty
-          ? failures.last
-          : '连接 ${addresses.single} 失败。';
+      return failures.isNotEmpty ? failures.last : '连接 ${addresses.single} 失败。';
     }
 
-    final summary = failures.isNotEmpty
-        ? failures.last
-        : '所有已发现的连接端口均未成功。';
+    final summary = failures.isNotEmpty ? failures.last : '所有已发现的连接端口均未成功。';
     return '已尝试 ${addresses.length} 个连接端口（${addresses.join(', ')}），均未成功。$summary';
   }
 
@@ -740,6 +735,74 @@ class WirelessConnectionController extends ChangeNotifier {
     final separatorIndex = trimmed.lastIndexOf(':');
     if (separatorIndex <= 0) return null;
     return trimmed.substring(0, separatorIndex);
+  }
+
+  // ── iOS wireless (pymobiledevice3 lockdown wifi-connections) ─────────────
+
+  /// Enables lockdown Wi‑Fi on a paired iOS device (USB once), then refreshes.
+  Future<bool> enableIosWifiConnections({String? udid}) async {
+    if (_iosWifiBusy ||
+        _pairingWireless ||
+        _connectingWireless ||
+        _waitingForQrScan) {
+      _wirelessError = '请先完成当前无线操作，再开启 iOS Wi‑Fi 连接。';
+      _wirelessMessage = null;
+      _notify();
+      return false;
+    }
+
+    _iosWifiBusy = true;
+    _wirelessMessage = null;
+    _wirelessError = null;
+    _notify();
+
+    try {
+      final available = await _devicesRepository.isPymobiledevice3Available;
+      if (!available) {
+        _wirelessError =
+            '未找到 pymobiledevice3。请在 Python 环境中安装后再试'
+            '（pip install -U pymobiledevice3）。';
+        return false;
+      }
+
+      await _devicesRepository.enableIosWifiConnections(udid: udid);
+      await _devicesRepository.refreshDevices(force: true);
+      if (_disposed) return true;
+      _wirelessMessage =
+          '已开启 iOS 无线调试。请保持同一 Wi‑Fi，拔掉 USB 后点「刷新设备」。';
+      return true;
+    } catch (error) {
+      if (_disposed) return false;
+      _wirelessError = error.toString();
+      return false;
+    } finally {
+      _iosWifiBusy = false;
+      _notify();
+    }
+  }
+
+  /// Forces a device-list refresh (picks up Network usbmux entries).
+  Future<void> refreshIosDevices() async {
+    _iosWifiBusy = true;
+    _wirelessMessage = null;
+    _wirelessError = null;
+    _notify();
+    try {
+      await _devicesRepository.refreshDevices(force: true, showLoading: false);
+      if (_disposed) return;
+      final ios = _devicesRepository.devices.whereType<IosDevice>().toList();
+      final wireless = ios.where((d) => d.isWireless).length;
+      _wirelessMessage = ios.isEmpty
+          ? '未发现 iOS 设备。请确认已 USB 配对、已开启无线调试，且与电脑同一 Wi‑Fi。'
+          : '当前 ${ios.length} 台 iOS'
+                '${wireless > 0 ? '（其中 $wireless 台无线）' : ''}。';
+    } catch (error) {
+      if (_disposed) return;
+      _wirelessError = error.toString();
+    } finally {
+      _iosWifiBusy = false;
+      _notify();
+    }
   }
 
   @override

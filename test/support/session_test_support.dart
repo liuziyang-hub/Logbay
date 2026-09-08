@@ -9,12 +9,17 @@ import 'package:eagly/features/logs/data/models/log_entry.dart';
 import 'package:eagly/features/logs/data/models/log_level.dart';
 import 'package:eagly/features/logs/data/models/log_tab_settings.dart';
 import 'package:eagly/features/logs/presentation/models/log_view_mode.dart';
+import 'package:eagly/features/terminal/data/terminal_line.dart';
+import 'package:eagly/features/terminal/data/terminal_process.dart';
+import 'package:eagly/features/terminal/data/terminal_tools.dart';
+import 'package:eagly/features/utilities/data/utility_command.dart';
 import 'package:eagly/features/wireless_connection/data/wireless_debug_models.dart';
 import 'package:eagly/features/flutter_scrcpy/flutter_scrcpy.dart';
 import 'package:eagly/services/device_session_repository.dart';
 import 'package:eagly/services/tools/adb_tool.dart';
 import 'package:eagly/services/tools/idevice_id_tool.dart';
 import 'package:eagly/services/tools/idevice_info_tool.dart';
+import 'package:eagly/services/tools/tool_process_runner.dart';
 
 LogTabSettings testSettings({
   int logLinesLimit = 50000,
@@ -214,11 +219,84 @@ class FakeSessionService extends DeviceSessionRepository {
     return iconToReturn;
   }
 
+  // ── Terminal feature ──────────────────────────────────────────────────────
+  final List<TerminalInvocation> terminalRequests = [];
+  final List<FakeTerminalProcess> terminalProcesses = [];
+  Object? terminalStartError;
+
+  @override
+  Future<TerminalProcessSession> startTerminalProcess(
+    TerminalInvocation invocation,
+  ) async {
+    terminalRequests.add(invocation);
+    final error = terminalStartError;
+    if (error != null) throw error;
+    final process = FakeTerminalProcess();
+    terminalProcesses.add(process);
+    return process.session;
+  }
+
+  // ── Utilities feature ─────────────────────────────────────────────────────
+  final List<UtilityInvocation> utilityRequests = [];
+  ToolCommandResult utilityResult = const ToolCommandResult(
+    exitCode: 0,
+    stdout: 'ok',
+    stderr: '',
+  );
+
+  /// Thrown by [runUtility] when set, to exercise the controller's error path.
+  Object? utilityError;
+
+  @override
+  Future<ToolCommandResult> runUtility(
+    UtilityInvocation invocation, {
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
+    utilityRequests.add(invocation);
+    final error = utilityError;
+    if (error != null) throw error;
+    return utilityResult;
+  }
+
   @override
   Future<void> dispose() async {
     await _activeStream?.close();
     _activeStream = null;
     await super.dispose();
+  }
+}
+
+/// Controllable stand-in for [TerminalProcessSession] used by tests.
+class FakeTerminalProcess {
+  FakeTerminalProcess() {
+    session = TerminalProcessSession(
+      output: _output.stream,
+      exitCode: _exit.future,
+      onKill: () async {
+        killed = true;
+        if (!_exit.isCompleted) _exit.complete(-1);
+        if (!_output.isClosed) await _output.close();
+      },
+      onInput: stdinLines.add,
+    );
+  }
+
+  late final TerminalProcessSession session;
+  final StreamController<TerminalOutputChunk> _output =
+      StreamController<TerminalOutputChunk>();
+  final Completer<int> _exit = Completer<int>();
+  final List<String> stdinLines = [];
+  bool killed = false;
+
+  void emit(String text, {bool isError = false}) {
+    if (!_output.isClosed) {
+      _output.add(TerminalOutputChunk(text, isError: isError));
+    }
+  }
+
+  Future<void> finish([int code = 0]) async {
+    if (!_exit.isCompleted) _exit.complete(code);
+    if (!_output.isClosed) await _output.close();
   }
 }
 

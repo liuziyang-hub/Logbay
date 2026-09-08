@@ -20,8 +20,13 @@ final RegExp _logcatSectionSeparatorRegex = RegExp(
   caseSensitive: false,
 );
 
+/// threadtime line: `MM-DD HH:MM:SS.mmm PID TID PRIORITY TAG: message`
+///
+/// TAG often contains colons (`Wth2:WeatherApplication`, `ocessService0:2`,
+/// truncated `…Service0:`). Match on `: ` after the priority — not `[^:]+` —
+/// or those lines are dropped entirely.
 final RegExp _logcatLineRegex = RegExp(
-  r'^(\d\d-\d\d\s+\d\d:\d\d:\d\d\.\d+)\s+(\d+)\s+(\d+)\s+([VDIWEF])\s+([^:]+):\s+(.*)',
+  r'^(\d\d-\d\d\s+\d\d:\d\d:\d\d\.\d+)\s+(\d+)\s+(\d+)\s+([VDIWEF])\s+(.*?):\s+(.*)$',
 );
 
 LogEntry? _parseFromLogcat(String line) {
@@ -30,8 +35,8 @@ LogEntry? _parseFromLogcat(String line) {
     final prefix = separatorMatch.group(1)!.toLowerCase();
     final section = separatorMatch.group(2)!.trim();
     final message = switch (prefix) {
-      'beginning of' => 'Beginning of $section',
-      'switch to' => 'Switched to $section',
+      'beginning of' => '缓冲区开始：$section',
+      'switch to' => '已切换到缓冲区：$section',
       _ => line.trim(),
     };
 

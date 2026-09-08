@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:gap/gap.dart';
 
@@ -24,21 +27,28 @@ class QuickAccessBar extends StatelessWidget {
       _ShortcutTile(
         icon: Icons.article_outlined,
         label: '日志',
-        sublabel: '实时 logcat 与 syslog',
+        sublabel: '实时设备日志',
         accelerator: acceleratorLabel('R'),
         isActive: s.isLogsOpen,
         onTap: s.toggleLogs,
         accentIndex: 0,
       ),
-      if (isAndroid)
-        _ShortcutTile(
-          icon: Icons.mobile_screen_share_outlined,
-          label: '镜像',
-          sublabel: '控制设备屏幕',
-          isActive: s.isMirrorOpen,
-          onTap: s.canMirror ? s.toggleMirror : null,
-          accentIndex: 1,
-        ),
+      _ShortcutTile(
+        icon: Icons.terminal_outlined,
+        label: '终端',
+        sublabel: '运行设备命令',
+        isActive: s.isTerminalOpen,
+        onTap: s.canUseTerminal ? s.toggleTerminal : null,
+        accentIndex: 1,
+      ),
+      _ShortcutTile(
+        icon: Icons.mobile_screen_share_outlined,
+        label: '镜像',
+        sublabel: isAndroid ? '控制设备屏幕' : '浏览器投屏',
+        isActive: s.isMirrorOpen,
+        onTap: s.canMirror ? s.toggleMirror : null,
+        accentIndex: 1,
+      ),
       if (!isAndroid)
         _ShortcutTile(
           icon: Icons.bug_report_outlined,
@@ -46,7 +56,7 @@ class QuickAccessBar extends StatelessWidget {
           sublabel: '崩溃报告',
           isActive: s.isCrashReportsOpen,
           onTap: s.canReadCrashReports ? s.toggleCrashReports : null,
-          accentIndex: 1,
+          accentIndex: 2,
         ),
       _ShortcutTile(
         icon: Icons.folder_open_outlined,
@@ -64,16 +74,192 @@ class QuickAccessBar extends StatelessWidget {
         onTap: s.canManageApps ? s.toggleApps : null,
         accentIndex: 0,
       ),
+      if (s.canRunUtilities)
+        _ShortcutTile(
+          icon: Icons.handyman_outlined,
+          label: '工具',
+          sublabel: '常用设备命令',
+          isActive: s.isUtilitiesOpen,
+          onTap: s.toggleUtilities,
+          accentIndex: 1,
+        ),
     ];
 
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        for (var i = 0; i < tiles.length; i++) ...[
-          if (i > 0) const Gap(10),
-          Expanded(child: tiles[i]),
+        Row(
+          children: [
+            for (var i = 0; i < tiles.length; i++) ...[
+              if (i > 0) const Gap(10),
+              Expanded(child: tiles[i]),
+            ],
+          ],
+        ),
+        if (isAndroid) ...[
+          const Gap(10),
+          _AndroidCaptureActions(session: session),
+        ] else ...[
+          const Gap(10),
+          _IosCaptureActions(session: session),
         ],
       ],
     );
+  }
+}
+
+class _AndroidCaptureActions extends StatelessWidget {
+  const _AndroidCaptureActions({required this.session});
+
+  final DeviceSessionController session;
+
+  static String _timestamp() {
+    final n = DateTime.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${n.year}${two(n.month)}${two(n.day)}-'
+        '${two(n.hour)}${two(n.minute)}${two(n.second)}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: session.mirrorController,
+      builder: (context, _) {
+        final enabled = session.canMirror;
+        final recording = session.isScreenRecording;
+        return Row(
+          children: [
+            OutlinedButton.icon(
+              onPressed: enabled ? () => _captureScreenshot(context) : null,
+              icon: const Icon(Icons.photo_camera_outlined, size: 18),
+              label: const Text('截图'),
+            ),
+            const Gap(8),
+            OutlinedButton.icon(
+              onPressed: !enabled
+                  ? null
+                  : () => recording
+                        ? _stopRecording(context)
+                        : _startRecording(context),
+              icon: Icon(
+                recording ? Icons.stop_circle : Icons.videocam_outlined,
+                size: 18,
+              ),
+              label: Text(recording ? '停止录制' : '录屏'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _captureScreenshot(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final bytes = await session.captureScreenshot();
+      if (bytes == null) {
+        messenger.showSnackBar(const SnackBar(content: Text('无法截图。')));
+        return;
+      }
+      final path = await FilePicker.platform.saveFile(
+        dialogTitle: '保存截图',
+        fileName: 'screenshot-${_timestamp()}.png',
+        type: FileType.custom,
+        allowedExtensions: ['png'],
+      );
+      if (path == null) return;
+      final outPath = path.toLowerCase().endsWith('.png') ? path : '$path.png';
+      await File(outPath).writeAsBytes(bytes);
+      messenger.showSnackBar(SnackBar(content: Text('截图已保存至 $outPath')));
+    } catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text('截图失败：$error')));
+    }
+  }
+
+  Future<void> _startRecording(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await session.startScreenRecording();
+      messenger.showSnackBar(const SnackBar(content: Text('录制中…再次点击停止。')));
+    } catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text('录制失败：$error')));
+    }
+  }
+
+  Future<void> _stopRecording(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final path = await FilePicker.platform.saveFile(
+        dialogTitle: '保存录屏',
+        fileName: 'recording-${_timestamp()}.mp4',
+        type: FileType.custom,
+        allowedExtensions: ['mp4'],
+      );
+      if (path == null) {
+        await session.mirrorController.cancelRecording();
+        return;
+      }
+      final outPath = path.toLowerCase().endsWith('.mp4') ? path : '$path.mp4';
+      await session.stopScreenRecording(outPath);
+      messenger.showSnackBar(SnackBar(content: Text('录屏已保存至 $outPath')));
+    } catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text('停止录制失败：$error')));
+    }
+  }
+}
+
+class _IosCaptureActions extends StatelessWidget {
+  const _IosCaptureActions({required this.session});
+
+  final DeviceSessionController session;
+
+  static String _timestamp() {
+    final n = DateTime.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${n.year}${two(n.month)}${two(n.day)}-'
+        '${two(n.hour)}${two(n.minute)}${two(n.second)}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: session.mirrorController,
+      builder: (context, _) {
+        final enabled = session.canMirror;
+        return Row(
+          children: [
+            OutlinedButton.icon(
+              onPressed: enabled ? () => _captureScreenshot(context) : null,
+              icon: const Icon(Icons.photo_camera_outlined, size: 18),
+              label: const Text('截图'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _captureScreenshot(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final bytes = await session.captureScreenshot();
+      if (bytes == null) {
+        messenger.showSnackBar(const SnackBar(content: Text('无法截图。')));
+        return;
+      }
+      final path = await FilePicker.platform.saveFile(
+        dialogTitle: '保存截图',
+        fileName: 'screenshot-${_timestamp()}.png',
+        type: FileType.custom,
+        allowedExtensions: ['png'],
+      );
+      if (path == null) return;
+      final outPath = path.toLowerCase().endsWith('.png') ? path : '$path.png';
+      await File(outPath).writeAsBytes(bytes);
+      messenger.showSnackBar(SnackBar(content: Text('截图已保存至 $outPath')));
+    } catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text('截图失败：$error')));
+    }
   }
 }
 

@@ -72,35 +72,74 @@ class MirrorControlStrip extends StatelessWidget {
               Icons.photo_camera_outlined,
               '截图',
               () => _captureScreenshot(context),
-              enabled: running,
+              enabled: controller.canStart || running,
             ),
-            actionButton(
-              recording ? Icons.stop_circle : Icons.videocam_outlined,
-              recording ? '停止录制' : '录制屏幕',
-              () => recording
-                  ? _stopRecording(context)
-                  : _startRecording(context),
-              enabled: running,
-              color: recording ? theme.colorScheme.error : null,
-            ),
-            actionButton(
-              Icons.screen_rotation_outlined,
-              '旋转设备',
-              () => _rotate(context),
-              enabled: running,
-            ),
-            const Gap(8),
-            divider(),
-            const Gap(8),
-            keyButton(Icons.arrow_back, '返回', ScrcpyKey.back),
-            keyButton(Icons.circle_outlined, '主屏幕', ScrcpyKey.home),
-            keyButton(Icons.crop_square, '概览', ScrcpyKey.appSwitch),
-            const Gap(8),
-            divider(),
-            const Gap(8),
-            keyButton(Icons.volume_up, '音量加', ScrcpyKey.volumeUp),
-            keyButton(Icons.volume_down, '音量减', ScrcpyKey.volumeDown),
-            keyButton(Icons.power_settings_new, '电源', ScrcpyKey.power),
+            if (controller.isIosMirror)
+              actionButton(
+                controller.iosAudioMuted
+                    ? Icons.volume_off_outlined
+                    : Icons.volume_up_outlined,
+                controller.iosAudioMuted ? '取消静音' : '静音',
+                () => controller.setIosAudioMuted(!controller.iosAudioMuted),
+                enabled: controller.canStart || running,
+              ),
+            if (!controller.isIosMirror)
+              actionButton(
+                recording ? Icons.stop_circle : Icons.videocam_outlined,
+                recording ? '停止录制' : '录制屏幕',
+                () => recording
+                    ? _stopRecording(context)
+                    : _startRecording(context),
+                enabled: controller.canStart || running || recording,
+                color: recording ? theme.colorScheme.error : null,
+              ),
+            if (!controller.isIosMirror)
+              actionButton(
+                Icons.screen_rotation_outlined,
+                '旋转设备',
+                () => _rotate(context),
+                enabled: controller.canStart || running,
+              ),
+            if (!controller.isIosMirror) ...[
+              const Gap(8),
+              divider(),
+              const Gap(8),
+              actionButton(
+                Icons.content_paste,
+                '粘贴剪贴板到设备',
+                () => _paste(context),
+                enabled: controlEnabled,
+              ),
+              IconButton(
+                tooltip: controller.clipboardSyncEnabled
+                    ? '设备剪贴板同步：开'
+                    : '设备剪贴板同步：关',
+                iconSize: 16,
+                color: controller.clipboardSyncEnabled
+                    ? theme.colorScheme.primary
+                    : null,
+                onPressed: () => controller.setClipboardSyncEnabled(
+                  !controller.clipboardSyncEnabled,
+                ),
+                icon: Icon(
+                  controller.clipboardSyncEnabled
+                      ? Icons.sync
+                      : Icons.sync_disabled,
+                ),
+              ),
+              const Gap(8),
+              divider(),
+              const Gap(8),
+              keyButton(Icons.arrow_back, '返回', ScrcpyKey.back),
+              keyButton(Icons.circle_outlined, '主屏幕', ScrcpyKey.home),
+              keyButton(Icons.crop_square, '概览', ScrcpyKey.appSwitch),
+              const Gap(8),
+              divider(),
+              const Gap(8),
+              keyButton(Icons.volume_up, '音量加', ScrcpyKey.volumeUp),
+              keyButton(Icons.volume_down, '音量减', ScrcpyKey.volumeDown),
+              keyButton(Icons.power_settings_new, '电源', ScrcpyKey.power),
+            ],
             const Gap(8),
           ],
         ),
@@ -120,9 +159,7 @@ class MirrorControlStrip extends StatelessWidget {
     try {
       final bytes = await controller.captureScreenshot();
       if (bytes == null) {
-        messenger.showSnackBar(
-          const SnackBar(content: Text('无法截图。')),
-        );
+        messenger.showSnackBar(const SnackBar(content: Text('无法截图。')));
         return;
       }
       final path = await FilePicker.platform.saveFile(
@@ -134,13 +171,9 @@ class MirrorControlStrip extends StatelessWidget {
       if (path == null) return; // user cancelled
       final outPath = path.toLowerCase().endsWith('.png') ? path : '$path.png';
       await File(outPath).writeAsBytes(bytes);
-      messenger.showSnackBar(
-        SnackBar(content: Text('截图已保存至 $outPath')),
-      );
+      messenger.showSnackBar(SnackBar(content: Text('截图已保存至 $outPath')));
     } catch (error) {
-      messenger.showSnackBar(
-        SnackBar(content: Text('截图失败：$error')),
-      );
+      messenger.showSnackBar(SnackBar(content: Text('截图失败：$error')));
     }
   }
 
@@ -149,14 +182,10 @@ class MirrorControlStrip extends StatelessWidget {
     try {
       await controller.startRecording();
       if (controller.isRecording) {
-        messenger.showSnackBar(
-          const SnackBar(content: Text('录制中…再次点击停止。')),
-        );
+        messenger.showSnackBar(const SnackBar(content: Text('录制中…再次点击停止。')));
       }
     } catch (error) {
-      messenger.showSnackBar(
-        SnackBar(content: Text('录制失败：$error')),
-      );
+      messenger.showSnackBar(SnackBar(content: Text('录制失败：$error')));
     }
   }
 
@@ -171,23 +200,26 @@ class MirrorControlStrip extends StatelessWidget {
     try {
       if (path == null) {
         await controller.cancelRecording();
-        messenger.showSnackBar(
-          const SnackBar(content: Text('录制已丢弃。')),
-        );
+        messenger.showSnackBar(const SnackBar(content: Text('录制已丢弃。')));
         return;
       }
       final outPath = path.toLowerCase().endsWith('.mp4') ? path : '$path.mp4';
-      messenger.showSnackBar(
-        const SnackBar(content: Text('正在保存录制…')),
-      );
+      messenger.showSnackBar(const SnackBar(content: Text('正在保存录制…')));
       await controller.stopRecording(outPath);
       messenger
         ..hideCurrentSnackBar()
         ..showSnackBar(SnackBar(content: Text('录制已保存至 $outPath')));
     } catch (error) {
-      messenger.showSnackBar(
-        SnackBar(content: Text('录制失败：$error')),
-      );
+      messenger.showSnackBar(SnackBar(content: Text('录制失败：$error')));
+    }
+  }
+
+  Future<void> _paste(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await controller.pasteFromClipboard();
+    } catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text('粘贴失败：$error')));
     }
   }
 

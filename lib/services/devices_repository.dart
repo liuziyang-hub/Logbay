@@ -12,25 +12,30 @@ import '../utils/apple_device_mapping.dart';
 import 'tools/adb_tool.dart';
 import 'tools/idevice_id_tool.dart';
 import 'tools/idevice_info_tool.dart';
+import 'tools/ios_wireless_tool.dart';
 
 class DevicesRepository extends ChangeNotifier {
   DevicesRepository._({
     AdbTool? adbTool,
     IdeviceIdTool? ideviceIdTool,
     IdeviceInfoTool? ideviceInfoTool,
+    IosWirelessTool? iosWirelessTool,
   }) : _adbTool = adbTool ?? AdbTool(),
        _ideviceIdTool = ideviceIdTool ?? IdeviceIdTool(),
-       _ideviceInfoTool = ideviceInfoTool ?? IdeviceInfoTool();
+       _ideviceInfoTool = ideviceInfoTool ?? IdeviceInfoTool(),
+       _iosWirelessTool = iosWirelessTool ?? IosWirelessTool();
 
   factory DevicesRepository.forTesting({
     AdbTool? adbTool,
     IdeviceIdTool? ideviceIdTool,
     IdeviceInfoTool? ideviceInfoTool,
+    IosWirelessTool? iosWirelessTool,
   }) {
     return DevicesRepository._(
       adbTool: adbTool,
       ideviceIdTool: ideviceIdTool,
       ideviceInfoTool: ideviceInfoTool,
+      iosWirelessTool: iosWirelessTool,
     );
   }
 
@@ -48,6 +53,7 @@ class DevicesRepository extends ChangeNotifier {
   final AdbTool _adbTool;
   final IdeviceIdTool _ideviceIdTool;
   final IdeviceInfoTool _ideviceInfoTool;
+  final IosWirelessTool _iosWirelessTool;
   final AppLogger _logger = AppLogger(source: 'DevicesRepository');
   final Map<String, _CachedAndroidDeviceDescription> _androidDescriptionCache =
       {};
@@ -149,16 +155,20 @@ class DevicesRepository extends ChangeNotifier {
     }
   }
 
+  /// Single mDNS poll — used by the QR pairing loop so each scan completes in
+  /// one adb round-trip instead of waiting through the full retry window.
+  Future<WirelessServiceDiscoveryResult> discoverMdnsServicesOnce() =>
+      _adbTool.discoverMdnsServices();
+
   Future<WirelessServiceDiscoveryResult> discoverMdnsServices() async {
-    WirelessServiceDiscoveryResult result = await _adbTool
-        .discoverMdnsServices();
+    WirelessServiceDiscoveryResult result = await discoverMdnsServicesOnce();
 
     for (int attempt = 0; attempt < _mdnsRetryCountMax; attempt++) {
       if (_disposed) break;
       if (result.isSuccess && result.services.isNotEmpty) break;
       await Future.delayed(_mdnsRetryInterval);
       if (_disposed) break;
-      result = await _adbTool.discoverMdnsServices();
+      result = await discoverMdnsServicesOnce();
     }
 
     return result;
@@ -172,6 +182,15 @@ class DevicesRepository extends ChangeNotifier {
   Future<DeviceCommandResult> connectWirelessAndroidDevice(String address) =>
       _adbTool.connectDevice(address);
 
+  /// Enables iOS lockdown Wi‑Fi connections via pymobiledevice3.
+  Future<void> enableIosWifiConnections({String? udid}) =>
+      _iosWirelessTool.setWifiConnections(enabled: true, udid: udid);
+
+  Future<void> disableIosWifiConnections({String? udid}) =>
+      _iosWirelessTool.setWifiConnections(enabled: false, udid: udid);
+
+  Future<bool> get isPymobiledevice3Available => IosWirelessTool.isAvailable();
+
   Future<void> _reloadDevices() async {
     final androidDevices = await _adbTool.getDevices();
     final describedAndroidDevices = await Future.wait(
@@ -180,9 +199,14 @@ class DevicesRepository extends ChangeNotifier {
     final deduplicatedAndroid = _deduplicateWirelessAndroid(
       describedAndroidDevices,
     );
-    final iosDeviceIds = await _ideviceIdTool.getDeviceIds();
+
+    final iosIds = await _collectIosDeviceIds();
     final iosSupportUnavailable = _ideviceIdTool.usbmuxdUnavailable;
-    final iosDevices = await Future.wait(iosDeviceIds.map(_resolveIosDevice));
+    final iosDevices = await Future.wait(
+      iosIds.entries.map(
+        (entry) => _resolveIosDevice(entry.key, isWireless: entry.value),
+      ),
+    );
     final nextDevices = _mergeDevices([...deduplicatedAndroid, ...iosDevices]);
 
     _logger.info(
@@ -231,19 +255,32 @@ class DevicesRepository extends ChangeNotifier {
       // An Android device that appears in `adb devices` but is not in the
       // `device` (online) state — e.g. `offline` or `unauthorized` — cannot
       // stream logs, so treat it as disconnected even though it is listed.
-      // iOS devices are only reported while physically attached, so their
-      // presence implies a usable connection regardless of pairing/lock state.
+      // iOS devices (USB or Network via usbmux) are only reported while
+      // reachable, so presence implies a usable connection.
       final isOnline = device is! AndroidDevice || device.status == 'device';
-      merged.add(
-        device.copyWith(
-          brand: device.brand ?? previous?.brand,
-          model: device.model ?? previous?.model,
-          name: device.name ?? previous?.name,
-          connectionState: isOnline
-              ? DeviceConnectionState.connected
-              : DeviceConnectionState.disconnected,
-        ),
-      );
+      final connectionState = isOnline
+          ? DeviceConnectionState.connected
+          : DeviceConnectionState.disconnected;
+      if (device is IosDevice) {
+        merged.add(
+          device.copyWith(
+            brand: device.brand ?? previous?.brand,
+            model: device.model ?? previous?.model,
+            name: device.name ?? previous?.name,
+            connectionState: connectionState,
+            isWireless: device.isWireless,
+          ),
+        );
+      } else {
+        merged.add(
+          device.copyWith(
+            brand: device.brand ?? previous?.brand,
+            model: device.model ?? previous?.model,
+            name: device.name ?? previous?.name,
+            connectionState: connectionState,
+          ),
+        );
+      }
     }
 
     for (final device in _devices) {
@@ -329,14 +366,17 @@ class DevicesRepository extends ChangeNotifier {
     return enriched;
   }
 
-  Future<Device> _resolveIosDevice(String deviceId) async {
+  Future<Device> _resolveIosDevice(
+    String deviceId, {
+    bool isWireless = false,
+  }) async {
     final cached = _iosDescriptionCache[deviceId];
     if (cached != null) {
-      return cached.toIosDevice(deviceId);
+      return cached.toIosDevice(deviceId, isWireless: isWireless);
     }
 
     final info = await _ideviceInfoTool.readDeviceInfo(deviceId);
-    final described = await _mapIosDeviceInfo(info);
+    final described = await _mapIosDeviceInfo(info, isWireless: isWireless);
     if (described.name != null || described.model != null) {
       _iosDescriptionCache[deviceId] = _CachedIosDeviceDescription(
         name: described.name,
@@ -344,6 +384,45 @@ class DevicesRepository extends ChangeNotifier {
       );
     }
     return described;
+  }
+
+  /// Merges `idevice_id -l` with `pymobiledevice3 usbmux list` so Network
+  /// devices are included and tagged wireless when ConnectionType says so.
+  ///
+  /// Map value = isWireless. When the same UDID appears as both USB and
+  /// Network, USB wins (isWireless=false).
+  Future<Map<String, bool>> _collectIosDeviceIds() async {
+    final fromIdevice = await _ideviceIdTool.getDeviceIds();
+    final wirelessById = <String, bool>{
+      for (final id in fromIdevice) id: false,
+    };
+
+    try {
+      final usbmux = await _iosWirelessTool.listUsbmuxDevices();
+      // Prefer USB when both connection types exist for one UDID.
+      final networkIds = <String>{};
+      final usbIds = <String>{};
+      for (final entry in usbmux) {
+        if (entry.isUsb) {
+          usbIds.add(entry.udid);
+        } else if (entry.isNetwork) {
+          networkIds.add(entry.udid);
+        } else {
+          usbIds.add(entry.udid);
+        }
+      }
+      for (final id in usbIds) {
+        wirelessById[id] = false;
+      }
+      for (final id in networkIds) {
+        if (usbIds.contains(id)) continue;
+        wirelessById[id] = true;
+      }
+    } catch (error) {
+      _logger.info('usbmux list unavailable: $error');
+    }
+
+    return wirelessById;
   }
 
   void _startAndroidDeviceWatcher() {
@@ -358,9 +437,12 @@ class DevicesRepository extends ChangeNotifier {
     );
   }
 
-  Future<Device> _mapIosDeviceInfo(IosDeviceInfo info) async {
+  Future<Device> _mapIosDeviceInfo(
+    IosDeviceInfo info, {
+    bool isWireless = false,
+  }) async {
     if (!info.isAvailable) {
-      return Device.ios(info.deviceId, info.status);
+      return Device.ios(info.deviceId, info.status, isWireless: isWireless);
     }
 
     return Device.ios(
@@ -368,6 +450,7 @@ class DevicesRepository extends ChangeNotifier {
       info.status,
       name: _firstNonEmpty(info.deviceName, info.productName),
       model: await _resolveIosModel(info),
+      isWireless: isWireless,
     );
   }
 
@@ -496,13 +579,14 @@ class _CachedIosDeviceDescription {
   final String? name;
   final String? model;
 
-  Device toIosDevice(String deviceId) {
+  Device toIosDevice(String deviceId, {bool isWireless = false}) {
     return Device.ios(
       deviceId,
       'device',
       name: name,
       model: model,
       connectionState: DeviceConnectionState.connected,
+      isWireless: isWireless,
     );
   }
 }

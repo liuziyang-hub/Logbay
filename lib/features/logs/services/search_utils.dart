@@ -13,7 +13,11 @@ List<int> computeSearchMatches(
   if (!pattern.isActive || !pattern.isValid) return [];
 
   final visibleColumns = LogColumn.values
-      .where((column) => !hiddenColumns.contains(column.name))
+      .where(
+        (column) =>
+            column.visibleFor(isIos: isIosLogContext) &&
+            !hiddenColumns.contains(column.name),
+      )
       .toList();
 
   final result = <int>[];

@@ -261,12 +261,12 @@ class _InlineFilterBarState extends State<InlineFilterBar> {
       for (final entry in _sources.recentPackageFilters())
         _InlineFilterValueCandidate(
           value: entry,
-          subtitle: 'Recent package filter',
+          subtitle: '最近使用的软件包筛选',
         ),
       for (final entry in _sources.knownPackageFilters())
         _InlineFilterValueCandidate(
           value: entry,
-          subtitle: 'Known package from logs',
+          subtitle: '日志中出现的软件包',
         ),
     ]);
   }
@@ -378,21 +378,21 @@ class _InlineFilterBarState extends State<InlineFilterBar> {
         for (final entry in _sources.recentTagFilters())
           _InlineFilterValueCandidate(
             value: entry,
-            subtitle: _isIos ? 'Recent category filter' : 'Recent tag filter',
+            subtitle: _isIos ? '最近使用的类别筛选' : '最近使用的标记筛选',
           ),
       ]),
       'message' => _mergeValueCandidates([
         for (final entry in _sources.recentMessageFilters())
           _InlineFilterValueCandidate(
             value: entry,
-            subtitle: 'Recent message filter',
+            subtitle: '最近使用的消息筛选',
           ),
       ]),
       'pid' => _mergeValueCandidates([
         for (final entry in _sources.recentPidTidFilters())
           _InlineFilterValueCandidate(
             value: entry,
-            subtitle: 'Recent pid/tid filter',
+            subtitle: '最近使用的 PID/TID 筛选',
           ),
       ]),
       _ => const <_InlineFilterValueCandidate>[],
@@ -497,11 +497,11 @@ class _InlineFilterBarState extends State<InlineFilterBar> {
               color: theme.colorScheme.onSurfaceVariant,
             ),
             Text(
-              'Bare words search the whole log entry. Use key:value for '
-              'package, ${_isIos ? 'category' : 'tag'}, pid, message, '
-              'level, or age (e.g. age:1h). Add =: for an exact match, ~: for '
-              'regex, or a leading - to exclude — e.g. -package:test or '
-              'tag~:auth.*. Quote values with spaces.',
+              '直接输入词语可在整条日志中搜索。使用 key:value 按'
+              '软件包、${_isIos ? '类别' : '标记'}、PID、消息、'
+              '优先级或时间范围筛选（例如 age:1h）。'
+              '=: 表示精确匹配，~: 表示正则；前缀 - 表示排除，'
+              '例如 -package:test 或 tag~:auth.*。含空格的值请加引号。',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
@@ -750,7 +750,7 @@ class _InlineFilterBarState extends State<InlineFilterBar> {
             ),
             const SizedBox(width: 4),
             IconButton(
-              tooltip: _helpVisible ? 'Hide filter help' : 'Show filter help',
+              tooltip: _helpVisible ? '隐藏筛选帮助' : '显示筛选帮助',
               onPressed: () => setState(() => _helpVisible = !_helpVisible),
               icon: Icon(_helpVisible ? Icons.help : Icons.help_outline),
             ),

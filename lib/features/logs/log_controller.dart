@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:collection/collection.dart';
 import 'package:eagly/features/logs/data/models/recent_fliter_values.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 
@@ -16,13 +17,14 @@ import 'data/models/log_tab_settings.dart';
 import 'presentation/models/log_view_mode.dart';
 import 'services/filter_utils.dart';
 import 'services/log_file_service.dart';
+import 'services/log_signal_detector.dart';
+import 'services/search_utils.dart';
 import '../../session/device_session_controller.dart';
 import '../../session/feature_controller.dart';
 import '../../utils/log_buffer.dart';
 import '../../utils/log_entry_utils.dart';
 import '../../utils/text_search_pattern.dart';
 import 'presentation/components/log_filter_controller.dart';
-import 'services/search_utils.dart';
 
 enum LogcatState { stopped, running, paused }
 
@@ -111,6 +113,11 @@ class LogController extends FeatureController {
 
   LogBuffer<LogEntry> _logsBuffer;
   final List<LogEntry> _pendingLogs = [];
+  final List<LogIssue> _issues = [];
+  final LogSignalDetector _signalDetector = const LogSignalDetector();
+  bool issuesTrayExpanded = true;
+  int? _pendingJumpFilteredIndex;
+  int _jumpRevision = 0;
 
   StreamSubscription<LogEntry>? _logSub;
   Timer? _flushTimer;
@@ -118,6 +125,9 @@ class LogController extends FeatureController {
   Timer? _inlineSearchDebounce;
   Timer? _watchdogTimer;
   Timer? _recoveryTimer;
+
+  /// Set while a [_notify] is queued for the end of the current frame.
+  bool _notifyScheduled = false;
 
   var logcatState = LogcatState.stopped;
 
@@ -265,10 +275,27 @@ class LogController extends FeatureController {
 
   bool get isIosLogContext => device is IosDevice;
 
+  /// Notifies listeners, deferring to the end of the frame when we are inside
+  /// one.
+  ///
+  /// Views call back into the controller from build-phase code paths (a
+  /// [State.dispose] during `finalizeTree`, a `didUpdateWidget`, a selection
+  /// callback fired from layout). Notifying there `setState()`s a locked or
+  /// mid-build tree, which throws and — worse — loses the rebuild the
+  /// notification was for.
   void _notify() {
-    if (!_disposed) {
+    if (_disposed) return;
+    if (SchedulerBinding.instance.schedulerPhase !=
+        SchedulerPhase.persistentCallbacks) {
       notifyListeners();
+      return;
     }
+    if (_notifyScheduled) return;
+    _notifyScheduled = true;
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      _notifyScheduled = false;
+      if (!_disposed) notifyListeners();
+    });
   }
 
   void _updateSettings(LogTabSettings settings) {
@@ -299,12 +326,27 @@ class LogController extends FeatureController {
     LogFilterViewMode.classic => classicFilter,
   };
 
+  /// Package name being followed for PID auto-rebinding (Apps → 查看日志).
+  String? _followedPackageName;
+
   /// Sets the package/process filter to [packageName] and applies it
   /// immediately, regardless of which filter bar is active — used by the
   /// Apps feature's "View logs" action to jump straight to one app's lines.
-  void applyPackageFilter(String packageName) {
-    classicFilter.setFieldFromInput(LogFilterField.packageName, packageName);
+  ///
+  /// When [followProcess] is true (default), rows whose PID maps to this
+  /// package also match after an app restart, even before package enrichment.
+  void applyPackageFilter(String packageName, {bool followProcess = true}) {
+    final trimmed = packageName.trim();
+    _followedPackageName = followProcess && trimmed.isNotEmpty ? trimmed : null;
+    classicFilter.setFieldFromInput(LogFilterField.packageName, trimmed);
     classicFilter.applyNow();
+  }
+
+  void clearPackageFollow() {
+    if (_followedPackageName == null) return;
+    _followedPackageName = null;
+    _invalidateFilteredLogs();
+    _notify();
   }
 
   void focusFilterInputs() {
@@ -319,7 +361,42 @@ class LogController extends FeatureController {
     _clearStoredLogs();
     _pendingLogs.clear();
     _pendingLogsMemoryBytes = 0;
+    _issues.clear();
+    _pendingJumpFilteredIndex = null;
     _notify();
+  }
+
+  List<LogIssue> get issues => List.unmodifiable(_issues);
+
+  int? get pendingJumpFilteredIndex => _pendingJumpFilteredIndex;
+
+  int get jumpRevision => _jumpRevision;
+
+  void clearIssues() {
+    if (_issues.isEmpty) return;
+    _issues.clear();
+    _notify();
+  }
+
+  void setIssuesTrayExpanded(bool value) {
+    if (issuesTrayExpanded == value) return;
+    issuesTrayExpanded = value;
+    _notify();
+  }
+
+  void jumpToIssue(LogIssue issue) {
+    disableAutoScroll();
+    final filtered = filteredLogs;
+    final index = filtered.indexWhere((e) => e.id == issue.logEntryId);
+    if (index < 0) return;
+    _pendingJumpFilteredIndex = index;
+    _jumpRevision++;
+    _notify();
+  }
+
+  void consumeJumpTarget() {
+    if (_pendingJumpFilteredIndex == null) return;
+    _pendingJumpFilteredIndex = null;
   }
 
   Future<LogExportResult> exportLogs() async {
@@ -585,12 +662,16 @@ class LogController extends FeatureController {
   }
 
   void setHiddenColumns(Set<String> columns) {
+    if (const SetEquality<String>().equals(hiddenColumns, columns)) return;
     _logViewerRevision++;
     _updateSettings(_settings.copyWith(hiddenColumns: Set.of(columns)));
     _invalidateSearchMatches();
   }
 
   void setColumnWidths(Map<String, double> widths) {
+    if (const MapEquality<String, double>().equals(columnWidths, widths)) {
+      return;
+    }
     _updateSettings(_settings.copyWith(columnWidths: Map.of(widths)));
   }
 
@@ -831,6 +912,13 @@ class LogController extends FeatureController {
   /// refreshes the filtered view. Does not touch the filter bars.
   void _applyFilterConfig(LogFilters configuration) {
     _appliedFilters = configuration;
+    if (_followedPackageName != null) {
+      final text = configuration.packageText.trim();
+      if (text.isEmpty ||
+          text.toLowerCase() != _followedPackageName!.toLowerCase()) {
+        _followedPackageName = null;
+      }
+    }
     if (selectedLogLevel != configuration.level) {
       _settings = _settings.copyWith(selectedLogLevel: configuration.level);
     }
@@ -848,7 +936,18 @@ class LogController extends FeatureController {
   String get _appliedFilterSignature => _appliedFilters.signature;
 
   bool _matchesLogFilters(LogEntry log) {
-    return matchesLogFilters(log, _appliedFilters, selectedLogLevel);
+    Set<String>? followPids;
+    final followed = _followedPackageName;
+    if (followed != null && followed.isNotEmpty) {
+      followPids = session.service.pidsForPackage(followed);
+    }
+    return matchesLogFilters(
+      log,
+      _appliedFilters,
+      selectedLogLevel,
+      isIosLogContext: isIosLogContext,
+      packageFollowPids: followPids,
+    );
   }
 
   bool get _hasActiveRetentionFilter =>
@@ -864,8 +963,10 @@ class LogController extends FeatureController {
   void _replaceStoredLogs(Iterable<LogEntry> entries) {
     final nextBuffer = LogBuffer<LogEntry>(baseCapacity: logLinesLimit);
     nextBuffer.setFilter(_retentionFilter);
+    _issues.clear();
     for (final entry in entries) {
       nextBuffer.append(entry);
+      _ingestIssue(entry);
     }
     nextBuffer.trimToCapacity();
     _logsBuffer = nextBuffer;
@@ -876,7 +977,29 @@ class LogController extends FeatureController {
   void _clearStoredLogs() {
     _logsBuffer.clear();
     _logsMemoryBytes = 0;
+    _issues.clear();
     _invalidateFilteredLogs();
+  }
+
+  void _ingestIssue(LogEntry entry) {
+    final issue = _signalDetector.detect(entry);
+    if (issue == null) return;
+    if (_issues.isNotEmpty) {
+      final last = _issues.last;
+      if (last.kind == issue.kind && last.summary == issue.summary) {
+        return;
+      }
+    }
+    _issues.add(issue);
+    if (_issues.length > 200) {
+      _issues.removeRange(0, _issues.length - 200);
+    }
+  }
+
+  void _dropIssuesFor(Iterable<LogEntry> evicted) {
+    if (evicted.isEmpty || _issues.isEmpty) return;
+    final ids = evicted.map((e) => e.id).toSet();
+    _issues.removeWhere((issue) => ids.contains(issue.logEntryId));
   }
 
   String _loggingSubjectLabel() {
@@ -1036,9 +1159,11 @@ class LogController extends FeatureController {
     for (final logEntry in pendingLogs) {
       final evictedLogs = _logsBuffer.append(logEntry);
       _reconcileFilteredCache(logEntry, evictedLogs);
+      _ingestIssue(logEntry);
       if (evictedLogs.isEmpty) continue;
       didEvictStoredLogs = true;
       evictedMemoryBytes += estimateLogsBytes(evictedLogs);
+      _dropIssuesFor(evictedLogs);
     }
 
     _logsMemoryBytes += pendingLogsMemoryBytes - evictedMemoryBytes;

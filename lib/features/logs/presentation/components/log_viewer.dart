@@ -13,9 +13,11 @@ import '../../data/models/log_entry.dart';
 import '../../../../services/preferences_service.dart';
 import '../../../../presentation/theme/app_theme.dart';
 import '../../../../utils/log_entry_utils.dart';
+import '../../../../utils/log_text_spans.dart';
 import '../../../../utils/text_search_pattern.dart';
 import 'log_row.dart';
 import 'log_viewer_header.dart';
+import 'row_selection_toolbar.dart';
 import '../log_viewer_constants.dart';
 
 enum LogViewerCopyAction { copyRow, copyMessage, copyTimestampAndMessage }
@@ -34,19 +36,17 @@ List<ContextMenuButtonItem> buildLogViewerContextMenuItems({
 }) {
   ContextMenuButtonItem selectionModeToggleButton() {
     return ContextMenuButtonItem(
-      label: rowSelectionMode
-          ? '关闭选择模式'
-          : '开启选择模式',
+      label: rowSelectionMode ? '关闭选择模式' : '开启选择模式',
       onPressed: onToggleRowSelectionMode,
     );
   }
 
   if (rowSelectionMode) {
     return [
-      ContextMenuButtonItem(label: '复制', onPressed: onCopyRow),
+      ContextMenuButtonItem(label: '复制整行', onPressed: onCopyRow),
       ContextMenuButtonItem(label: '复制消息', onPressed: onCopyMessage),
       ContextMenuButtonItem(
-        label: '复制时间 + 消息',
+        label: '复制时间戳和消息',
         onPressed: onCopyTimestampAndMessage,
       ),
       if (onToggleRowSelectionMode != null) selectionModeToggleButton(),
@@ -163,6 +163,10 @@ class _LogViewerState extends State<LogViewer> {
   double _largestBuiltMessageWidth = 0;
   bool _messageWidthRefreshScheduled = false;
 
+  /// The app zoom, applied as a text scale. Measurements must use it or the
+  /// message column comes out narrower than the text actually rendered.
+  TextScaler _textScaler = TextScaler.noScaling;
+
   // For pinch-to-zoom handling
   double? _scaleBaseFontSize;
   bool _isDraggingRowSelection = false;
@@ -184,8 +188,23 @@ class _LogViewerState extends State<LogViewer> {
 
   TextStyle get _monoStyle => _applyFont(context.eaglyTheme.logBodyStyle);
 
-  TextStyle _applyFont(TextStyle base) =>
-      base.copyWith(fontSize: PreferencesService.logFontSize);
+  /// Keep CJK/emoji fallbacks when only the size preference changes — both
+  /// Android logcat and iOS syslog rows use this style.
+  TextStyle _applyFont(TextStyle base) => base.copyWith(
+    fontSize: PreferencesService.logFontSize,
+    locale: base.locale ?? const Locale('zh', 'CN'),
+    fontFamilyFallback: base.fontFamilyFallback,
+  );
+
+  /// Text SelectionArea stays interactive until a row selection exists (or a
+  /// drag is in progress). Matches upstream selection-enhancements coexistence.
+  bool get _textSelectionEnabled =>
+      widget.selectedRowIndices.isEmpty && !_isDraggingRowSelection;
+
+  /// Whole-row hit targets only after row selection has actually started, so
+  /// enabling "selection mode" alone still allows normal text selection.
+  bool get _wholeRowSelectionEnabled =>
+      widget.rowSelectionMode && !_textSelectionEnabled;
 
   TextSearchPattern get _searchPattern =>
       TextSearchPattern.fromConfig(widget.search);
@@ -201,6 +220,16 @@ class _LogViewerState extends State<LogViewer> {
     widget.scrollController.addListener(_handleVerticalScroll);
     // Rebuild when the global log font size preference changes.
     PreferencesService.logFontSizeListenable.addListener(_onFontSizeChanged);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final textScaler = MediaQuery.textScalerOf(context);
+    if (textScaler == _textScaler) return;
+    _textScaler = textScaler;
+    // Cached message widths were measured at the previous zoom.
+    _largestBuiltMessageWidth = 0;
   }
 
   @override
@@ -236,8 +265,7 @@ class _LogViewerState extends State<LogViewer> {
 
   @override
   void dispose() {
-    _flushWidths();
-    _saveWidthsTimer?.cancel();
+    _flushPendingWidths();
     _horizontalScrollController.dispose();
     widget.scrollController.removeListener(_handleVerticalScroll);
     PreferencesService.logFontSizeListenable.removeListener(_onFontSizeChanged);
@@ -430,9 +458,11 @@ class _LogViewerState extends State<LogViewer> {
   }
 
   double _measureTextWidth(String text, TextStyle style) {
+    final value = text.isEmpty ? ' ' : text;
+    _messageWidthPainter.textScaler = _textScaler;
     _messageWidthPainter.text = TextSpan(
-      text: text.isEmpty ? ' ' : text,
       style: style,
+      children: buildLogInlineSpans(value, style),
     );
     _messageWidthPainter.layout();
     return _messageWidthPainter.width;
@@ -574,11 +604,23 @@ class _LogViewerState extends State<LogViewer> {
     return math.max(viewportWidth, width);
   }
 
-  void _flushWidths() {
-    if (_saveWidthsTimer?.isActive ?? false) {
-      _saveWidthsTimer!.cancel();
-    }
-    widget.onColumnWidthsChanged?.call(Map.of(_widths));
+  /// Saves a width change still sitting in the debounce timer.
+  ///
+  /// Called from [dispose], where the element tree is locked: notifying the
+  /// controller synchronously would `setState()` ancestors mid-unmount, so the
+  /// callback is deferred to a microtask (runs once the frame is done). Fires
+  /// only when a save is actually pending — an unmount with no pending resize
+  /// must not push (identical) widths back into the controller and trigger a
+  /// pointless rebuild of the whole pane.
+  void _flushPendingWidths() {
+    final timer = _saveWidthsTimer;
+    _saveWidthsTimer = null;
+    if (timer == null || !timer.isActive) return;
+    timer.cancel();
+    final onColumnWidthsChanged = widget.onColumnWidthsChanged;
+    if (onColumnWidthsChanged == null) return;
+    final widths = Map.of(_widths);
+    scheduleMicrotask(() => onColumnWidthsChanged(widths));
   }
 
   void _debounceSaveWidths() {
@@ -589,6 +631,7 @@ class _LogViewerState extends State<LogViewer> {
   }
 
   bool _isVisible(LogColumn col) {
+    if (!col.visibleFor(isIos: widget.isIos)) return false;
     if (_hiddenColumns.contains(col.name)) return false;
     // Narrow panes: drop secondary columns so 消息 stays on screen.
     if (_viewportWidth > 0 && _viewportWidth < 520 && col == LogColumn.tid) {
@@ -644,44 +687,47 @@ class _LogViewerState extends State<LogViewer> {
         position.dx,
         position.dy,
       ),
-      items: LogColumn.values.where((c) => !c.isExpandable).map((col) {
-        return PopupMenuItem<LogColumn>(
-          value: col,
-          child: StatefulBuilder(
-            builder: (context, setMenuState) {
-              final visible = _isVisible(col);
-              return Row(
-                children: [
-                  Checkbox(
-                    visualDensity: VisualDensity.compact,
-                    value: visible,
-                    onChanged: (_) {
-                      setState(() {
-                        if (visible) {
-                          _hiddenColumns.add(col.name);
-                        } else {
-                          _hiddenColumns.remove(col.name);
-                        }
-                        widget.onHiddenColumnsChanged?.call(
-                          Set.of(_hiddenColumns),
-                        );
-                        setMenuState(() {});
-                        Navigator.of(context).pop();
-                      });
-                    },
-                  ),
-                  Text(
-                    col.labelFor(isIos: widget.isIos),
-                    style: Theme.of(
-                      context,
-                    ).textTheme.bodySmall?.copyWith(fontSize: 12),
-                  ),
-                ],
-              );
-            },
-          ),
-        );
-      }).toList(),
+      items: LogColumn.values
+          .where((c) => !c.isExpandable && c.visibleFor(isIos: widget.isIos))
+          .map((col) {
+            return PopupMenuItem<LogColumn>(
+              value: col,
+              child: StatefulBuilder(
+                builder: (context, setMenuState) {
+                  final visible = _isVisible(col);
+                  return Row(
+                    children: [
+                      Checkbox(
+                        visualDensity: VisualDensity.compact,
+                        value: visible,
+                        onChanged: (_) {
+                          setState(() {
+                            if (visible) {
+                              _hiddenColumns.add(col.name);
+                            } else {
+                              _hiddenColumns.remove(col.name);
+                            }
+                            widget.onHiddenColumnsChanged?.call(
+                              Set.of(_hiddenColumns),
+                            );
+                            setMenuState(() {});
+                            Navigator.of(context).pop();
+                          });
+                        },
+                      ),
+                      Text(
+                        col.labelFor(isIos: widget.isIos),
+                        style: Theme.of(
+                          context,
+                        ).textTheme.bodySmall?.copyWith(fontSize: 12),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            );
+          })
+          .toList(),
     );
     // If user taps on a column name directly (selects it as value), toggle it
     if (result != null) {
@@ -923,65 +969,19 @@ class _LogViewerState extends State<LogViewer> {
         globalPosition.dy,
       ),
       items: const [
-        PopupMenuItem(value: LogViewerCopyAction.copyRow, child: Text('复制')),
+        PopupMenuItem(value: LogViewerCopyAction.copyRow, child: Text('复制整行')),
         PopupMenuItem(
           value: LogViewerCopyAction.copyMessage,
           child: Text('复制消息'),
         ),
         PopupMenuItem(
           value: LogViewerCopyAction.copyTimestampAndMessage,
-          child: Text('复制时间 + 消息'),
+          child: Text('复制时间戳和消息'),
         ),
       ],
     );
     if (action == null) return;
     await widget.onRowCopyAction?.call(index, action);
-  }
-
-  Widget _buildRowSelectionToolbar() {
-    final count = widget.selectedRowIndices.length;
-    final theme = Theme.of(context);
-
-    return Align(
-      alignment: Alignment.bottomCenter,
-      child: Padding(
-        padding: const EdgeInsets.only(bottom: 16),
-        child: Material(
-          key: const ValueKey('row-selection-toolbar'),
-          elevation: 10,
-          color: theme.colorScheme.surfaceContainerHighest,
-          shadowColor: Colors.black.withValues(alpha: 0.8),
-          borderRadius: BorderRadius.circular(20),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 10,
-                  ),
-                  child: Text(
-                    count == 1 ? '已选择 1 行' : '已选择 $count 行',
-                    style: theme.textTheme.labelLarge?.copyWith(
-                      color: theme.colorScheme.onSurface,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                FilledButton.tonalIcon(
-                  onPressed: widget.onClearRowSelection,
-                  icon: const Icon(Icons.deselect_outlined),
-                  label: const Text('清除'),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
   }
 
   @override
@@ -1027,7 +1027,7 @@ class _LogViewerState extends State<LogViewer> {
                   },
                   onScaleEnd: (_) => _scaleBaseFontSize = null,
                   child: Listener(
-                    onPointerDown: widget.rowSelectionMode
+                    onPointerDown: _wholeRowSelectionEnabled
                         ? null
                         : (event) {
                             if ((event.buttons & kPrimaryButton) == 0) return;
@@ -1036,14 +1036,16 @@ class _LogViewerState extends State<LogViewer> {
                     onPointerUp: (event) => _endRowSelectionDrag(event.pointer),
                     onPointerCancel: (event) =>
                         _endRowSelectionDrag(event.pointer),
+                    // Keep SelectionArea mounted (Logbay); suppress the visible
+                    // highlight while rows are selected instead of removing it.
                     child: Theme(
-                      data: widget.rowSelectionMode
-                          ? Theme.of(context).copyWith(
+                      data: _textSelectionEnabled
+                          ? Theme.of(context)
+                          : Theme.of(context).copyWith(
                               textSelectionTheme: const TextSelectionThemeData(
                                 selectionColor: Colors.transparent,
                               ),
-                            )
-                          : Theme.of(context),
+                            ),
                       child: SelectionArea(
                         key: const ValueKey('log-viewer-selection-area'),
                         onSelectionChanged: (selectedContent) {
@@ -1102,7 +1104,7 @@ class _LogViewerState extends State<LogViewer> {
             Positioned(
               top: 0,
               right: 0,
-              height: 29,
+              height: context.scaled(29),
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 color: Theme.of(context).colorScheme.surfaceContainerHighest,
@@ -1130,7 +1132,10 @@ class _LogViewerState extends State<LogViewer> {
               ),
             ),
             if (widget.selectedRowIndices.isNotEmpty)
-              _buildRowSelectionToolbar(),
+              RowSelectionToolbar(
+                selectedCount: widget.selectedRowIndices.length,
+                onClear: widget.onClearRowSelection,
+              ),
           ],
         );
       },
@@ -1174,7 +1179,7 @@ class _LogViewerState extends State<LogViewer> {
       currentMatchLogIndex: widget.currentMatchLogIndex,
       wrapText: wrapText,
       monoStyle: _monoStyle,
-      wholeRowSelectionEnabled: widget.rowSelectionMode,
+      wholeRowSelectionEnabled: _wholeRowSelectionEnabled,
       allowSelectionStart: log.isUserSelectable,
       onRowSelectionChanged: () =>
           widget.onRowSelectionChanged?.call(index, false),

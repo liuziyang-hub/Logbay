@@ -9,6 +9,7 @@ import '../../presentation/components/eagly_dialog.dart';
 import 'components/discovered_wireless_target.dart';
 import 'components/wireless_discovery_card.dart';
 import 'components/wireless_feedback_banner.dart';
+import 'components/wireless_ios_section.dart';
 import 'components/wireless_manual_section.dart';
 import 'components/wireless_placeholder_card.dart';
 import 'components/wireless_qr_panel.dart';
@@ -127,6 +128,7 @@ class _WirelessConnectionDialogState extends State<WirelessConnectionDialog> {
     _pairAddressController.dispose();
     _pairingCodeController.dispose();
     _connectAddressController.dispose();
+    wirelessController.dispose();
     super.dispose();
   }
 
@@ -189,8 +191,7 @@ class _WirelessConnectionDialogState extends State<WirelessConnectionDialog> {
 
   void _maybeAutoGenerateQr() {
     if (wirelessController.qrSession == null &&
-        !wirelessController.isWaitingForQrScan &&
-        !wirelessController.isWirelessBusy) {
+        wirelessController.canStartQrPairing) {
       _handleQrPair();
     }
   }
@@ -447,7 +448,7 @@ class _WirelessConnectionDialogState extends State<WirelessConnectionDialog> {
           child: WirelessQrPanel(
             payload: session?.payload,
             waiting: waiting,
-            busy: wirelessController.isWirelessBusy,
+            busy: !wirelessController.canStartQrPairing,
             onGenerate: _handleQrPair,
             onCancel: wirelessController.cancelQrPairing,
           ),
@@ -474,11 +475,8 @@ class _WirelessConnectionDialogState extends State<WirelessConnectionDialog> {
         ),
         const Gap(16),
         WirelessManualSection(
-          title: _manualConnectAddresses.isNotEmpty
-              ? '配对并连接'
-              : '使用配对码配对',
-          description:
-              '输入设备屏幕上显示的配对地址和配对码。若有可用连接地址，将自动继续连接。',
+          title: _manualConnectAddresses.isNotEmpty ? '配对并连接' : '使用配对码配对',
+          description: '输入设备屏幕上显示的配对地址和配对码。若有可用连接地址，将自动继续连接。',
           child: Column(
             children: [
               TextField(
@@ -520,9 +518,7 @@ class _WirelessConnectionDialogState extends State<WirelessConnectionDialog> {
                         )
                       : const Icon(Icons.verified_user_outlined),
                   label: Text(
-                    _manualConnectAddresses.isNotEmpty
-                        ? '配对并连接'
-                        : '配对',
+                    _manualConnectAddresses.isNotEmpty ? '配对并连接' : '配对',
                   ),
                 ),
               ),
@@ -541,19 +537,13 @@ class _WirelessConnectionDialogState extends State<WirelessConnectionDialog> {
             icon: Icon(
               _showManualConnectSection ? Icons.expand_less : Icons.expand_more,
             ),
-            label: Text(
-              _showManualConnectSection
-                  ? '隐藏手动连接'
-                  : '已配对？手动连接',
-            ),
+            label: Text(_showManualConnectSection ? '隐藏手动连接' : '已配对？手动连接'),
           ),
         ),
         if (_showManualConnectSection) ...[
           const Gap(4),
           WirelessManualSection(
-            title: connectedDevice != null
-                ? '使用已连接设备'
-                : '连接并启动 Logcat',
+            title: connectedDevice != null ? '使用已连接设备' : '连接并开始采集日志',
             description: connectedDevice != null
                 ? '此无线设备已连接。请复用现有连接，无需重新连接。'
                 : '仅在自动连接未能完成或设备此前已配对时使用。',
@@ -588,7 +578,7 @@ class _WirelessConnectionDialogState extends State<WirelessConnectionDialog> {
                         : Text(
                             connectedDevice != null
                                 ? '使用已连接设备'
-                                : '连接并启动 Logcat',
+                                : '连接并开始采集日志',
                           ),
                   ),
                 ),
@@ -608,7 +598,7 @@ class _WirelessConnectionDialogState extends State<WirelessConnectionDialog> {
       animation: Listenable.merge([manager, wirelessController]),
       builder: (context, _) {
         return EaglyDialog(
-          title: '无线 ADB',
+          title: '无线连接',
           icon: Icons.wifi_tethering,
           width: 720,
           height: 560,
@@ -639,31 +629,37 @@ class _WirelessConnectionDialogState extends State<WirelessConnectionDialog> {
                         icon: Icon(Icons.tune),
                         label: Text('手动输入'),
                       ),
+                      ButtonSegment<_WirelessDialogSection>(
+                        value: _WirelessDialogSection.ios,
+                        icon: Icon(Icons.apple),
+                        label: Text('iOS'),
+                      ),
                     ],
                     selected: {_section},
                     onSelectionChanged: (selection) {
                       _onSectionChanged(selection.first);
                     },
                   ),
-                  FilledButton.tonalIcon(
-                    onPressed: wirelessController.isWirelessBusy
-                        ? null
-                        : _handleDiscover,
-                    icon: wirelessController.isDiscoveringWireless
-                        ? SizedBox.square(
-                            dimension: 16,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: theme.colorScheme.primary,
-                            ),
-                          )
-                        : const Icon(Icons.travel_explore),
-                    label: Text(
-                      wirelessController.hasAttemptedWirelessDiscovery
-                          ? '刷新发现'
-                          : '发现附近',
+                  if (_section != _WirelessDialogSection.ios)
+                    FilledButton.tonalIcon(
+                      onPressed: wirelessController.isWirelessBusy
+                          ? null
+                          : _handleDiscover,
+                      icon: wirelessController.isDiscoveringWireless
+                          ? SizedBox.square(
+                              dimension: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: theme.colorScheme.primary,
+                              ),
+                            )
+                          : const Icon(Icons.travel_explore),
+                      label: Text(
+                        wirelessController.hasAttemptedWirelessDiscovery
+                            ? '刷新发现'
+                            : '发现附近',
+                      ),
                     ),
-                  ),
                   if (manager.selected != null)
                     Text(
                       '当前设备：${manager.selected!.device.displayName}',
@@ -689,6 +685,20 @@ class _WirelessConnectionDialogState extends State<WirelessConnectionDialog> {
                     _WirelessDialogSection.manual => _buildManualEntryTab(
                       context,
                     ),
+                    _WirelessDialogSection.ios => WirelessIosSection(
+                      manager: manager,
+                      busy: wirelessController.isIosWifiBusy,
+                      onEnableWifiConnections: (udid) async {
+                        final ok = await wirelessController
+                            .enableIosWifiConnections(udid: udid);
+                        if (ok && mounted) {
+                          widget.onShowSnackBar('已开启 iOS 无线调试');
+                        }
+                      },
+                      onRefresh: () {
+                        wirelessController.refreshIosDevices();
+                      },
+                    ),
                   },
                 ),
               ),
@@ -700,4 +710,4 @@ class _WirelessConnectionDialogState extends State<WirelessConnectionDialog> {
   }
 }
 
-enum _WirelessDialogSection { nearby, qr, manual }
+enum _WirelessDialogSection { nearby, qr, manual, ios }

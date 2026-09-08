@@ -33,7 +33,15 @@ class IdeviceSyslogTool extends ToolProcessRunner {
       onListen: () async {
         logInfo('Starting idevicesyslog for $processName');
         try {
-          process = await startProcess(['-u', deviceId]);
+          // Disable ANSI colors — escape codes break the header regex and
+          // cause lines to be dropped before any entry is buffered.
+          // Decode path (shared with Android UI fonts): UTF-8 stdout → strip
+          // ANSI → decode cat-v \M- escapes → IosSyslogParser.
+          process = await startProcess([
+            '-u',
+            deviceId,
+            '--no-colors',
+          ]);
           final stderrFuture = stderrText(process!);
           var emittedLogs = false;
 

@@ -4,19 +4,20 @@ import 'package:flutter/material.dart';
 import '../../../data/device.dart';
 import '../../../session/device_session_controller.dart';
 import '../../apps/apps_feature_view.dart';
-import '../../adb_shell/adb_shell_feature_view.dart';
 import '../../crash_reports/crash_report_feature_view.dart';
 import '../../device_home/device_home_feature_view.dart';
 import '../../device_info/device_info_feature_view.dart';
 import '../../file_manager/file_manager_feature_view.dart';
 import '../../logs/log_feature_view.dart';
 import '../../mirror/mirror_feature_view.dart';
+import '../../terminal/terminal_feature_view.dart';
+import '../../utilities/utilities_feature_view.dart';
 import 'android_unauthorized_guidance.dart';
 import 'ios_guidance.dart';
 import 'pane_resize_handle.dart';
 
 /// The content area of the device screen: guidance when the device needs user
-/// action, otherwise Home or the feature workspace (Logs, Details, Shell,
+/// action, otherwise Home or the feature workspace (Logs, Details, Terminal,
 /// Mirror, Crash Reports, Files and Apps alongside when open).
 class DeviceScreenContent extends StatelessWidget {
   const DeviceScreenContent({
@@ -82,7 +83,8 @@ class _Workspace extends StatelessWidget {
     final files = session.fileManagerController;
     final apps = session.appsController;
     final deviceInfo = session.deviceInfoController;
-    final adbShell = session.adbShellController;
+    final terminal = session.terminalSessionManager;
+    final utilities = session.utilitiesController;
 
     // Open features split the full width proportionally to their pane widths,
     // so no empty space remains; the dividers still resize them by ratio.
@@ -94,7 +96,8 @@ class _Workspace extends StatelessWidget {
         files,
         apps,
         deviceInfo,
-        adbShell,
+        terminal,
+        utilities,
       ]),
       builder: (context, _) => Row(
         children: [
@@ -178,17 +181,30 @@ class _Workspace extends StatelessWidget {
               onResize: deviceInfo.setPaneWidth,
             ),
           ],
-          if (session.isAdbShellOpen) ...[
+          if (session.isTerminalOpen) ...[
             Expanded(
-              flex: adbShell.paneWidth.round(),
-              child: AdbShellFeatureView(
-                controller: adbShell,
-                onClose: session.closeAdbShell,
+              flex: terminal.paneWidth.round(),
+              child: TerminalFeatureView(
+                manager: terminal,
+                onClose: session.closeTerminal,
               ),
             ),
             PaneResizeHandle(
-              paneWidth: () => adbShell.paneWidth,
-              onResize: adbShell.setPaneWidth,
+              paneWidth: () => terminal.paneWidth,
+              onResize: terminal.setPaneWidth,
+            ),
+          ],
+          if (session.isUtilitiesOpen) ...[
+            Expanded(
+              flex: utilities.paneWidth.round(),
+              child: UtilitiesFeatureView(
+                controller: utilities,
+                onClose: session.closeUtilities,
+              ),
+            ),
+            PaneResizeHandle(
+              paneWidth: () => utilities.paneWidth,
+              onResize: utilities.setPaneWidth,
             ),
           ],
         ],

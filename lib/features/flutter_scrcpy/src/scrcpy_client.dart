@@ -93,12 +93,12 @@ enum ScrcpyTouchAction { down, move, up }
 /// Hardware / navigation keys that can be injected into the device.
 enum ScrcpyKey { back, home, appSwitch, power, volumeUp, volumeDown }
 
-/// Encodes and sends scrcpy control messages on the control socket. Incoming
-/// device→client messages (clipboard, etc.) are drained and ignored.
+/// Encodes and sends scrcpy control messages on the control socket, and
+/// parses incoming device→client messages (currently just clipboard sync).
 class ScrcpyControl {
   ScrcpyControl(this._socket) {
     _subscription = _socket.listen(
-      (_) {},
+      _onData,
       onError: (_) {},
       cancelOnError: false,
     );
@@ -107,9 +107,27 @@ class ScrcpyControl {
   final Socket _socket;
   late final StreamSubscription<Uint8List> _subscription;
 
+  final _clipboardController = StreamController<String>.broadcast();
+
+  /// Emits the device clipboard's text whenever it changes on-device (the
+  /// server pushes these unsolicited, `clipboard_autosync` is on by default).
+  Stream<String> get onDeviceClipboardChanged => _clipboardController.stream;
+
+  final List<int> _inBuffer = <int>[];
+
   static const int _typeInjectKeycode = 0;
   static const int _typeInjectTouch = 2;
   static const int _typeBackOrScreenOn = 4;
+  static const int _typeSetClipboard = 9;
+
+  static const int _deviceMsgClipboard = 0;
+  static const int _deviceMsgAckClipboard = 1;
+
+  /// Server truncates SET_CLIPBOARD text longer than this (scrcpy protocol
+  /// constant: `CONTROL_MSG_CLIPBOARD_TEXT_MAX_LENGTH`).
+  static const int _clipboardTextMaxLength = 300000;
+
+  int _clipboardSequence = 0;
 
   /// Android `KeyEvent` keycodes for the injectable [ScrcpyKey]s.
   static const Map<ScrcpyKey, int> _keycodes = {
@@ -195,6 +213,27 @@ class ScrcpyControl {
     _send(msg);
   }
 
+  /// Sets the device clipboard to [text]. When [paste] is true (the default)
+  /// the server also simulates a paste action immediately afterwards.
+  void setClipboard(String text, {bool paste = true}) {
+    final textBytes = Uint8List.fromList(utf8.encode(text));
+    final clipped = textBytes.length > _clipboardTextMaxLength
+        ? textBytes.sublist(0, _clipboardTextMaxLength)
+        : textBytes;
+    final msg = ByteData(14 + clipped.length);
+    var o = 0;
+    msg.setUint8(o, _typeSetClipboard);
+    o += 1;
+    msg.setUint64(o, ++_clipboardSequence);
+    o += 8;
+    msg.setUint8(o, paste ? 1 : 0);
+    o += 1;
+    msg.setUint32(o, clipped.length);
+    o += 4;
+    msg.buffer.asUint8List().setRange(o, o + clipped.length, clipped);
+    _send(msg);
+  }
+
   /// Presses/releases the BACK button (also wakes the screen).
   void backOrScreenOn(ScrcpyTouchAction action) {
     final msg = ByteData(2);
@@ -209,8 +248,44 @@ class ScrcpyControl {
     } catch (_) {}
   }
 
+  void _onData(Uint8List data) {
+    _inBuffer.addAll(data);
+    _drainDeviceMessages();
+  }
+
+  /// Parses complete device→client messages out of [_inBuffer]. Only
+  /// clipboard message types are understood; an unrecognized type means the
+  /// buffer can no longer be reliably framed, so parsing stops there (we
+  /// never send control messages, like UHID_CREATE, that would provoke other
+  /// device message types).
+  void _drainDeviceMessages() {
+    while (_inBuffer.isNotEmpty) {
+      final type = _inBuffer[0];
+      switch (type) {
+        case _deviceMsgClipboard:
+          if (_inBuffer.length < 5) return;
+          final length = ByteData.sublistView(
+            Uint8List.fromList(_inBuffer.sublist(1, 5)),
+          ).getUint32(0);
+          if (_inBuffer.length < 5 + length) return;
+          final textBytes = _inBuffer.sublist(5, 5 + length);
+          _inBuffer.removeRange(0, 5 + length);
+          try {
+            _clipboardController.add(utf8.decode(textBytes));
+          } catch (_) {}
+        case _deviceMsgAckClipboard:
+          if (_inBuffer.length < 9) return;
+          _inBuffer.removeRange(0, 9);
+        default:
+          _inBuffer.clear();
+          return;
+      }
+    }
+  }
+
   Future<void> close() async {
     await _subscription.cancel();
+    await _clipboardController.close();
     try {
       _socket.destroy();
     } catch (_) {}
@@ -253,6 +328,37 @@ class ScrcpyClient {
 
   void _log(String message) => onLog?.call(message);
 
+  /// Overall budget for jar push + tunnel + handshake. Without this, a wedged
+  /// adb or silent server leaves the UI on "starting" forever.
+  static const Duration connectTimeout = Duration(seconds: 20);
+  static const Duration _adbCommandTimeout = Duration(seconds: 12);
+
+  Future<ProcessResult> _runAdb(
+    List<String> args, {
+    Duration timeout = _adbCommandTimeout,
+  }) async {
+    final process = await Process.start(_adb, args);
+    final stdout = StringBuffer();
+    final stderr = StringBuffer();
+    process.stdout
+        .transform(const SystemEncoding().decoder)
+        .listen(stdout.write);
+    process.stderr
+        .transform(const SystemEncoding().decoder)
+        .listen(stderr.write);
+    try {
+      final code = await process.exitCode.timeout(timeout);
+      return ProcessResult(process.pid, code, stdout.toString(), stderr.toString());
+    } on TimeoutException {
+      try {
+        process.kill();
+      } catch (_) {}
+      throw ScrcpyClientException(
+        'adb 命令超时（${timeout.inSeconds}s）：${args.join(' ')}',
+      );
+    }
+  }
+
   Future<ScrcpyStream> connect(
     String deviceId, {
     ScrcpyVideoOptions options = const ScrcpyVideoOptions(),
@@ -262,31 +368,10 @@ class ScrcpyClient {
       throw ScrcpyClientException('scrcpy-server jar not found (path: $jar)');
     }
 
-    // 1. Deploy the server jar (idempotent; push is fast even when present).
-    final push = await Process.run(_adb, [
-      '-s',
-      deviceId,
-      'push',
-      jar,
-      _deviceJarPath,
-    ]);
-    if (push.exitCode != 0) {
-      throw ScrcpyClientException('adb push failed: ${push.stderr}');
-    }
-
-    // 2. Session id → abstract socket name (scrcpy_%08x).
-    final scid = Random.secure().nextInt(0x7FFFFFFF) + 1;
-    final scidHex = scid.toRadixString(16).padLeft(8, '0');
-    final localName = 'scrcpy_$scidHex';
-
-    // 3. Forward tunnel: adb picks a local TCP port (tcp:0) bound to the
-    //    device-side abstract socket the server will listen on.
-    final port = await _adbForward(deviceId, localName);
-    _log('forward 127.0.0.1:$port -> localabstract:$localName');
-
     Process? server;
     Socket? videoSocket;
     Socket? controlSocket;
+    int? port;
 
     Future<void> cleanup() async {
       try {
@@ -298,108 +383,141 @@ class ScrcpyClient {
       try {
         server?.kill();
       } catch (_) {}
-      await _adbForwardRemove(deviceId, port);
+      if (port != null) await _adbForwardRemove(deviceId, port!);
     }
 
     try {
-      // 4. Launch the server. tunnel_forward=true → server listens on the
-      //    abstract socket and we dial in; audio off; control per options.
-      final args = <String>[
-        '-s',
-        deviceId,
-        'shell',
-        'CLASSPATH=$_deviceJarPath',
-        'app_process',
-        '/',
-        _serverClass,
-        serverVersion,
-        'scid=$scidHex',
-        'log_level=${options.logLevel}',
-        'tunnel_forward=true',
-        'audio=false',
-        'control=${options.control}',
-        'video=true',
-        'video_codec=${options.codec}',
-        'send_frame_meta=true',
-        if (options.maxSize != null) 'max_size=${options.maxSize}',
-        if (options.maxFps != null) 'max_fps=${options.maxFps}',
-        if (options.videoBitRate != null)
-          'video_bit_rate=${options.videoBitRate}',
-      ];
-      server = await Process.start(_adb, args);
+      return await () async {
+        // 1. Deploy the server jar (idempotent; push is fast even when present).
+        final push = await _runAdb([
+          '-s',
+          deviceId,
+          'push',
+          jar,
+          _deviceJarPath,
+        ]);
+        if (push.exitCode != 0) {
+          throw ScrcpyClientException('adb push failed: ${push.stderr}');
+        }
 
-      var serverExited = false;
-      final serverExitCode = server.exitCode.then((code) {
-        serverExited = true;
-        return code;
-      });
-      // Drain server logs so its pipes never fill (which would stall it).
-      server.stdout
-          .transform(const SystemEncoding().decoder)
-          .transform(const LineSplitter())
-          .listen((line) => _log('[server] $line'));
-      server.stderr
-          .transform(const SystemEncoding().decoder)
-          .transform(const LineSplitter())
-          .listen((line) => _log('[server] $line'));
+        // 2. Session id → abstract socket name (scrcpy_%08x).
+        final scid = Random.secure().nextInt(0x7FFFFFFF) + 1;
+        final scidHex = scid.toRadixString(16).padLeft(8, '0');
+        final localName = 'scrcpy_$scidHex';
 
-      // 5. Dial the tunnel. The server accepts sockets in order (video, then
-      //    control) and only starts streaming once all expected sockets are
-      //    connected, so when control is enabled we must connect both before
-      //    reading the forward "dummy byte" the server emits on the first one.
-      final reader = await _establishSockets(
-        port: port,
-        needControl: options.control,
-        isServerDead: () => serverExited,
-        assignVideo: (s) => videoSocket = s,
-        assignControl: (s) => controlSocket = s,
-      );
-      final control = controlSocket == null
-          ? null
-          : ScrcpyControl(controlSocket!);
+        // 3. Forward tunnel: adb picks a local TCP port (tcp:0) bound to the
+        //    device-side abstract socket the server will listen on.
+        port = await _adbForward(deviceId, localName);
+        _log('forward 127.0.0.1:$port -> localabstract:$localName');
 
-      // 6. Handshake: device name (64B) then codec id (4B).
-      final nameBytes = await reader.readExactly(_deviceNameFieldLength);
-      final deviceName = _cString(nameBytes);
-      final codecId = String.fromCharCodes(await reader.readExactly(4));
-      _log('handshake: name="$deviceName" codec="$codecId"');
+        // 4. Launch the server. tunnel_forward=true → server listens on the
+        //    abstract socket and we dial in; audio off; control per options.
+        final args = <String>[
+          '-s',
+          deviceId,
+          'shell',
+          'CLASSPATH=$_deviceJarPath',
+          'app_process',
+          '/',
+          _serverClass,
+          serverVersion,
+          'scid=$scidHex',
+          'log_level=${options.logLevel}',
+          'tunnel_forward=true',
+          'audio=false',
+          'control=${options.control}',
+          'video=true',
+          'video_codec=${options.codec}',
+          'send_frame_meta=true',
+          if (options.maxSize != null) 'max_size=${options.maxSize}',
+          if (options.maxFps != null) 'max_fps=${options.maxFps}',
+          if (options.videoBitRate != null)
+            'video_bit_rate=${options.videoBitRate}',
+        ];
+        server = await Process.start(_adb, args);
 
-      // 7. Consume the video header and align to the first packet. The header
-      //    layout has bytes we don't fully attribute and may drift between
-      //    scrcpy versions, so we resync to the first 12-byte frame meta whose
-      //    payload begins with an Annex-B start code.
-      final size = await _resyncToFirstPacket(reader);
-      final dims = size.dimensions;
-      _log('video header: ${dims.$1}x${dims.$2}');
+        var serverExited = false;
+        final serverExitCode = server!.exitCode.then((code) {
+          serverExited = true;
+          return code;
+        });
+        // Drain server logs so its pipes never fill (which would stall it).
+        server!.stdout
+            .transform(const SystemEncoding().decoder)
+            .transform(const LineSplitter())
+            .listen((line) => _log('[server] $line'));
+        server!.stderr
+            .transform(const SystemEncoding().decoder)
+            .transform(const LineSplitter())
+            .listen((line) => _log('[server] $line'));
 
-      final controller = StreamController<ScrcpyPacket>(
-        onCancel: () {}, // teardown is via ScrcpyStream.stop()
-      );
+        // 5. Dial the tunnel. The server accepts sockets in order (video, then
+        //    control) and only starts streaming once all expected sockets are
+        //    connected, so when control is enabled we must connect both before
+        //    reading the forward "dummy byte" the server emits on the first one.
+        final reader = await _establishSockets(
+          port: port!,
+          needControl: options.control,
+          isServerDead: () => serverExited,
+          assignVideo: (s) => videoSocket = s,
+          assignControl: (s) => controlSocket = s,
+        );
+        final control =
+            controlSocket == null ? null : ScrcpyControl(controlSocket!);
 
-      // 8. Pump packets. First packet is already buffered as [size.firstPacket].
-      unawaited(
-        _pump(reader, controller, firstPacket: size.firstPacket),
-      );
+        // 6. Handshake: device name (64B) then codec id (4B).
+        final nameBytes = await reader
+            .readExactly(_deviceNameFieldLength)
+            .timeout(const Duration(seconds: 8));
+        final deviceName = _cString(nameBytes);
+        final codecId = String.fromCharCodes(
+          await reader.readExactly(4).timeout(const Duration(seconds: 5)),
+        );
+        _log('handshake: name="$deviceName" codec="$codecId"');
 
-      var stopped = false;
-      Future<void> stop() async {
-        if (stopped) return;
-        stopped = true;
-        await reader.cancel();
-        await control?.close();
-        if (!controller.isClosed) await controller.close();
-        await cleanup();
-      }
+        // 7. Consume the video header and align to the first packet. The header
+        //    layout has bytes we don't fully attribute and may drift between
+        //    scrcpy versions, so we resync to the first 12-byte frame meta whose
+        //    payload begins with an Annex-B start code.
+        final size = await _resyncToFirstPacket(reader)
+            .timeout(const Duration(seconds: 8));
+        final dims = size.dimensions;
+        _log('video header: ${dims.$1}x${dims.$2}');
 
-      return ScrcpyStream(
-        deviceName: deviceName,
-        codecId: codecId,
-        width: dims.$1,
-        height: dims.$2,
-        packets: controller.stream,
-        control: control,
-        serverExitCode: serverExitCode,
-        onStop: stop,
+        final controller = StreamController<ScrcpyPacket>(
+          onCancel: () {}, // teardown is via ScrcpyStream.stop()
+        );
+
+        // 8. Pump packets. First packet is already buffered as [size.firstPacket].
+        unawaited(
+          _pump(reader, controller, firstPacket: size.firstPacket),
+        );
+
+        var stopped = false;
+        Future<void> stop() async {
+          if (stopped) return;
+          stopped = true;
+          await reader.cancel();
+          await control?.close();
+          if (!controller.isClosed) await controller.close();
+          await cleanup();
+        }
+
+        return ScrcpyStream(
+          deviceName: deviceName,
+          codecId: codecId,
+          width: dims.$1,
+          height: dims.$2,
+          packets: controller.stream,
+          control: control,
+          serverExitCode: serverExitCode,
+          onStop: stop,
+        );
+      }().timeout(connectTimeout);
+    } on TimeoutException {
+      await cleanup();
+      throw const ScrcpyClientException(
+        '启动屏幕镜像超时。请确认设备已授权 USB 调试后重试。',
       );
     } catch (error) {
       await cleanup();
@@ -568,7 +686,7 @@ class ScrcpyClient {
   }
 
   Future<int> _adbForward(String deviceId, String localName) async {
-    final result = await Process.run(_adb, [
+    final result = await _runAdb([
       '-s',
       deviceId,
       'forward',
@@ -587,13 +705,16 @@ class ScrcpyClient {
 
   Future<void> _adbForwardRemove(String deviceId, int port) async {
     try {
-      await Process.run(_adb, [
-        '-s',
-        deviceId,
-        'forward',
-        '--remove',
-        'tcp:$port',
-      ]);
+      await _runAdb(
+        [
+          '-s',
+          deviceId,
+          'forward',
+          '--remove',
+          'tcp:$port',
+        ],
+        timeout: const Duration(seconds: 5),
+      );
     } catch (_) {}
   }
 

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:gap/gap.dart';
 
 import '../../presentation/components/centered_state_message.dart';
+import '../../presentation/theme/app_theme.dart';
 import 'apps_controller.dart';
 import 'components/app_context_menu.dart';
 import 'components/app_tile.dart';
@@ -60,10 +61,9 @@ class _AppsFeatureViewState extends State<AppsFeatureView> {
 
   Future<void> _handleClearData(AppInfo app) async {
     final confirmed = await _confirmDestructive(
-      title: '清除 ${app.displayName} 的数据？',
-      message:
-          '此操作将永久删除该应用在设备上的数据和缓存。'
-          '应用将如同全新安装一样重新启动。',
+      title: '清除「${app.displayName}」的数据？',
+      message: '这将永久删除该应用在设备上的数据与缓存，'
+          '应用会像刚安装一样重新启动。',
       confirmLabel: '清除数据',
     );
     if (!confirmed) return;
@@ -72,8 +72,8 @@ class _AppsFeatureViewState extends State<AppsFeatureView> {
 
   Future<void> _handleUninstall(AppInfo app) async {
     final confirmed = await _confirmDestructive(
-      title: '卸载 ${app.displayName}？',
-      message: '此操作将永久从设备中移除该应用及其数据。',
+      title: '卸载「${app.displayName}」？',
+      message: '这将从设备永久移除该应用及其数据。',
       confirmLabel: '卸载',
     );
     if (!confirmed) return;
@@ -172,7 +172,7 @@ class _AppsFeatureViewState extends State<AppsFeatureView> {
           final searching = controller.searchText.trim().isNotEmpty;
           return CenteredStateMessage(
             icon: searching ? Icons.search_off : Icons.apps_outlined,
-            title: searching ? '没有匹配的应用' : '未找到应用',
+            title: searching ? '无匹配应用' : '未找到应用',
             description: searching
                 ? '请尝试其他搜索条件。'
                 : '此设备没有可显示的应用。',
@@ -320,7 +320,7 @@ class _Toolbar extends StatelessWidget {
         children: [
           Expanded(
             child: SizedBox(
-              height: 40,
+              height: context.scaled(40),
               child: TextField(
                 controller: searchController,
                 onChanged: controller.setSearchText,
@@ -353,3 +353,4 @@ class _Toolbar extends StatelessWidget {
     );
   }
 }
+

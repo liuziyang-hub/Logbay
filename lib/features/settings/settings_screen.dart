@@ -27,6 +27,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late AtmosphereTheme _atmosphereTheme;
   late bool _wrapText;
   late bool _autoScroll;
+  late bool _preferIosUnifiedLogging;
   late LogLevel _selectedLogLevel;
   late LogFilterViewMode _filterViewMode;
   late double _logFontSize;
@@ -40,6 +41,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _atmosphereTheme = PreferencesService.atmosphereTheme;
     _wrapText = PreferencesService.wrapText;
     _autoScroll = PreferencesService.autoScroll;
+    _preferIosUnifiedLogging = PreferencesService.preferIosUnifiedLogging;
     _selectedLogLevel = PreferencesService.selectedLogLevel;
     _filterViewMode = PreferencesService.filterViewMode;
     _logFontSize = PreferencesService.logFontSize;
@@ -331,6 +333,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   PreferencesService.autoScroll = value;
                 },
               ),
+              SwitchListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                value: _preferIosUnifiedLogging,
+                title: const Text('iOS 统一日志'),
+                subtitle: const Text(
+                  '优先用 pymobiledevice3（os_trace）；不可用时回退 idevicesyslog',
+                ),
+                onChanged: (value) {
+                  setState(() => _preferIosUnifiedLogging = value);
+                  PreferencesService.preferIosUnifiedLogging = value;
+                },
+              ),
               ListTile(
                 dense: true,
                 contentPadding: EdgeInsets.zero,
@@ -368,7 +383,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ListTile(
                 dense: true,
                 contentPadding: EdgeInsets.zero,
-                title: const Text('默认过滤样式'),
+                title: const Text('默认筛选样式'),
                 subtitle: Text(_filterViewMode.description),
                 trailing: SegmentedButton<LogFilterViewMode>(
                   segments: LogFilterViewMode.values

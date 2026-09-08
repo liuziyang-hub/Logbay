@@ -66,6 +66,7 @@ sealed class Device {
     String? model,
     String? name,
     DeviceConnectionState connectionState = DeviceConnectionState.connected,
+    bool isWireless = false,
   }) {
     return IosDevice(
       id,
@@ -74,6 +75,7 @@ sealed class Device {
       model: model,
       name: name,
       connectionState: connectionState,
+      isWireless: isWireless,
     );
   }
 
@@ -270,10 +272,36 @@ final class IosDevice extends Device {
     super.model,
     super.name,
     super.connectionState,
+    this.isWireless = false,
   }) : super._();
+
+  /// True when usbmux reports [ConnectionType] Network (Wi‑Fi lockdown).
+  final bool isWireless;
 
   @override
   DevicePlatform get platform => DevicePlatform.ios;
+
+  @override
+  IosDevice copyWith({
+    String? id,
+    String? status,
+    String? brand,
+    String? model,
+    String? name,
+    DevicePlatform? platform,
+    DeviceConnectionState? connectionState,
+    bool? isWireless,
+  }) {
+    return IosDevice(
+      id ?? this.id,
+      status ?? this.status,
+      brand: brand ?? this.brand,
+      model: model ?? this.model,
+      name: name ?? this.name,
+      connectionState: connectionState ?? this.connectionState,
+      isWireless: isWireless ?? this.isWireless,
+    );
+  }
 
   @override
   ({String primary, String? secondary}) get displayLabel {
@@ -300,6 +328,23 @@ final class IosDevice extends Device {
     }
     return normalizedModel ?? normalizedName ?? id;
   }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is IosDevice &&
+        other.id == id &&
+        other.status == status &&
+        other.brand == brand &&
+        other.model == model &&
+        other.name == name &&
+        other.connectionState == connectionState &&
+        other.isWireless == isWireless;
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(id, status, brand, model, name, connectionState, isWireless);
 }
 
 Device _buildDevice({

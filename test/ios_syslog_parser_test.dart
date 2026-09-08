@@ -167,5 +167,61 @@ void main() {
       expect(entry, isNotNull);
       expect(entry!.level, 'panic');
     });
+
+    test('strips ANSI colors and keeps unmatched preamble lines', () {
+      final parser = IosSyslogParser(now: () => DateTime(2026, 9, 2));
+      final logs = <LogEntry>[];
+
+      logs.addAll(parser.addLine('\x1B[32mConnecting to device...\x1B[0m'));
+      logs.addAll(
+        parser.addLine(
+          '\x1B[0mSep  2 10:41:00.123456 SpringBoard[100] <Notice>: unlocked\x1B[0m',
+        ),
+      );
+      final trailing = parser.flush();
+      if (trailing != null) logs.add(trailing);
+
+      expect(logs, hasLength(2));
+      expect(logs.first.tag, 'idevicesyslog');
+      expect(logs.first.message, 'Connecting to device...');
+      expect(logs.last.tag, 'SpringBoard');
+      expect(logs.last.message, 'unlocked');
+      expect(logs.last.timestamp, '2026-09-02 10:41:00.123');
+    });
+
+    test('decodes NetShort MaiyaAdManager ad lines from live syslog', () {
+      final parser = IosSyslogParser(now: () => DateTime(2026, 9, 2));
+      parser
+          .addLine(
+            r'Sep  2 12:13:04 NetShort[5929] <Error>: 2026-09-02 12:13:04:152-\M-b\M^]\M^L[ERROR]-[MaiyaAdManager-concurrentRequestGenerator(with:retryLimit:retryInterval:requestTaskTag:realtime:extraInfo:)]: \M-e\M-9\M-?\M-e\M^Q\M^J\M-g\M-.\M-!\M-g\M^P\M^F -> \M-e\M-9\M-6\M-h\M-!\M^L\M-g\M^@\M^Q\M-e\M-8\M^C\M-f\M-5\M^A\M-d\M-;\M-;\M-e\M^J\M-!tag=waterfall&token=13&adUnitId=ca-app-pub-6880728595184927/3074847987 \M-p\M^_\M^Q\M^I admob interstitial ad\M-e\M-9\M-?\M-e\M^Q\M^Jca-app-pub-6880728595184927/3074847987\M-g\M-,\M-,3\M-f\M^]\M-!\M-g\M-,\M-,2\M-f\M-,\M-!\M-h\M-/\M-7\M-f\M-1\M^B\M-e\M-<\M^B\M-e\M-8\M-8\M-o\M-<\M^Zcode=101',
+          )
+          .toList();
+
+      final entry = parser.flush();
+      expect(entry, isNotNull);
+      expect(entry!.level, 'error');
+      expect(entry.packageName, 'NetShort');
+      expect(entry.message, contains('广告'));
+      expect(entry.message, contains('MaiyaAdManager'));
+      expect(entry.message, isNot(contains('竞价')));
+    });
+
+    test('decodes meta escapes mixed with already-decoded Unicode', () {
+      final parser = IosSyslogParser(now: () => DateTime(2026, 9, 2));
+      // "物资" as UTF-8 bytes 0xE7 0x89 0xA9 0xE8 0xB5 0x84 via \M- escapes,
+      // after an already-decoded Chinese prefix.
+      parser
+          .addLine(
+            r'Sep  2 10:41:00.000001 App[1] <Notice>: 缓存\M-g\M-^I\M-)未命中',
+          )
+          .toList();
+
+      final entry = parser.flush();
+      expect(entry, isNotNull);
+      expect(entry!.message, contains('缓存'));
+      expect(entry.message, contains('未命中'));
+      // 物 = U+7269 from UTF-8 E7 89 A9
+      expect(entry.message, contains('物'));
+    });
   });
 }

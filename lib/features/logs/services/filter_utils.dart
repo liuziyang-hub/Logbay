@@ -8,11 +8,21 @@ import '../data/models/log_level.dart';
 bool matchesLogFilters(
   LogEntry log,
   LogFilters appliedFilters,
-  LogLevel effectiveSelectedLogLevel, {
+  LogLevel selectedLogLevel, {
   DateTime? now,
+  bool isIosLogContext = false,
+  Set<String>? packageFollowPids,
 }) {
-  final selectedLevel = effectiveSelectedLogLevel;
-  if (LogLevel.fromStored(log.level).hierarchy > selectedLevel.hierarchy) {
+  // Keyword search (classic 消息 / inline bare terms) should scan the full
+  // buffered stream — App 内调试面板里的「竞价」等 Debug 行不应被「信息」挡掉。
+  final hasKeywordFilter =
+      appliedFilters.messageTerms.isNotEmpty ||
+      appliedFilters.rawTerms.isNotEmpty;
+  final effectiveLevel = hasKeywordFilter
+      ? LogLevel.defaultSelectionForPlatform(isIos: isIosLogContext)
+      : selectedLogLevel;
+
+  if (LogLevel.fromStored(log.level).hierarchy > effectiveLevel.hierarchy) {
     return false;
   }
 
@@ -21,7 +31,11 @@ bool matchesLogFilters(
     return false;
   }
 
-  if (!_matchesAllTerms(packageFilterValue(log), appliedFilters.packageTerms)) {
+  if (!_matchesPackageTerms(
+    log,
+    appliedFilters.packageTerms,
+    packageFollowPids,
+  )) {
     return false;
   }
 
@@ -47,8 +61,14 @@ bool matchesLogFilters(
     return false;
   }
 
-  if (!_matchesAllTerms(log.message, appliedFilters.messageTerms)) {
-    return false;
+  // Classic「消息」searches package/process + tag + message (Studio/Console-style
+  // keyword). Keywords that live only in the tag or process name stay findable.
+  if (appliedFilters.messageTerms.isNotEmpty) {
+    final messageHaystack =
+        '${packageFilterValue(log)} ${log.tag} ${log.message}';
+    if (!_matchesAllTerms(messageHaystack, appliedFilters.messageTerms)) {
+      return false;
+    }
   }
 
   return true;
@@ -64,6 +84,21 @@ String packageFilterValue(LogEntry log) {
   if (processName != null && processName.isNotEmpty) return processName;
 
   return '';
+}
+
+/// Package terms match the package/process string, **or** (when following an
+/// app) the entry's PID is in [packageFollowPids] — so App restart still shows
+/// lines before the package column catches up.
+bool _matchesPackageTerms(
+  LogEntry log,
+  List<FilterTerm> packageTerms,
+  Set<String>? packageFollowPids,
+) {
+  if (packageTerms.isEmpty) return true;
+  if (_matchesAllTerms(packageFilterValue(log), packageTerms)) return true;
+  if (packageFollowPids == null || packageFollowPids.isEmpty) return false;
+  final pid = log.pid.trim();
+  return pid.isNotEmpty && packageFollowPids.contains(pid);
 }
 
 /// True when every term in [terms] matches [candidate]. An empty [terms] matches

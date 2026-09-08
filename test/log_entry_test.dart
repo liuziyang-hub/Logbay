@@ -86,10 +86,10 @@ void main() {
       expect(paused.isSpecialEntry, isTrue);
       expect(paused.isUserSelectable, isFalse);
       expect(paused.isCopyable, isFalse);
-      expect(paused.typeLabel, 'Paused');
+      expect(paused.typeLabel, '已暂停');
       expect(paused.level, 'I');
       expect(paused.message, 'Paused live logging for Pixel 8.');
-      expect(paused.specialSearchableText, contains('Paused'));
+      expect(paused.specialSearchableText, contains('已暂停'));
     });
 
     test('parses fatal Android threadtime lines and trims padded tags', () {
@@ -114,7 +114,7 @@ void main() {
       expect(entry.tag, 'adb logcat');
       expect(entry.level, 'I');
       expect(entry.processName, 'crash');
-      expect(entry.message, 'Beginning of crash');
+      expect(entry.message, '缓冲区开始：crash');
     });
   });
 }

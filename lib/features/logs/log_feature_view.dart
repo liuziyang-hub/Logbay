@@ -14,6 +14,7 @@ import '../../presentation/components/app_log_overlay.dart';
 import '../../presentation/components/centered_state_message.dart';
 import '../../presentation/components/feature_view.dart';
 import '../../presentation/components/text_search_bar.dart';
+import 'presentation/components/log_issues_tray.dart';
 import 'presentation/components/log_viewer.dart';
 import '../../utils/log_entry_utils.dart';
 import '../../utils/log_feedback.dart';
@@ -99,12 +100,12 @@ class _LogFeatureViewState extends FeatureViewState<LogFeatureView> {
     final copiedLabel = switch (action) {
       LogViewerCopyAction.copyRow => '整行',
       LogViewerCopyAction.copyMessage => '消息',
-      LogViewerCopyAction.copyTimestampAndMessage => '时间 + 消息',
+      LogViewerCopyAction.copyTimestampAndMessage => '时间戳和消息',
     };
     showSnackBar(
       copiedCount == 1
-          ? '已为 1 行复制$copiedLabel。'
-          : '已为 $copiedCount 行复制$copiedLabel。',
+          ? '已复制 1 行（$copiedLabel）。'
+          : '已复制 $copiedCount 行（$copiedLabel）。',
     );
   }
 
@@ -267,9 +268,16 @@ class _LogFeatureViewState extends FeatureViewState<LogFeatureView> {
     final safeIndex = matches.isEmpty
         ? null
         : controller.currentSearchMatchLogIndex(matches);
+    final jumpIndex = controller.pendingJumpFilteredIndex;
+    final highlightIndex = jumpIndex ??
+        (controller.searchBarVisible && controller.appliedInlineSearch.isActive
+            ? safeIndex
+            : null);
 
     return LogViewer(
-      key: ValueKey('log-viewer-${controller.logViewerRevision}'),
+      key: ValueKey(
+        'log-viewer-${controller.logViewerRevision}-${controller.jumpRevision}',
+      ),
       logs: filtered,
       scrollController: controller.scrollController,
       wrapText: controller.wrapText,
@@ -286,10 +294,7 @@ class _LogFeatureViewState extends FeatureViewState<LogFeatureView> {
       onToggleRowSelectionMode: controller.toggleRowSelectionMode,
       onSelectedTextChanged: controller.setSelectedSearchText,
       search: controller.appliedInlineSearch,
-      currentMatchLogIndex:
-          controller.searchBarVisible && controller.appliedInlineSearch.isActive
-          ? safeIndex
-          : null,
+      currentMatchLogIndex: highlightIndex,
       onClearRowSelection: controller.clearSelectedRows,
       hiddenColumns: controller.hiddenColumns,
       columnWidths: controller.columnWidths,
@@ -307,7 +312,28 @@ class _LogFeatureViewState extends FeatureViewState<LogFeatureView> {
   ) {
     return Stack(
       children: [
-        _buildLogViewer(controller, filtered, matches),
+        Column(
+          children: [
+            LogIssuesTray(
+              issues: controller.issues,
+              expanded: controller.issuesTrayExpanded,
+              onToggleExpanded: () => controller.setIssuesTrayExpanded(
+                !controller.issuesTrayExpanded,
+              ),
+              onClear: controller.clearIssues,
+              onJump: (issue) {
+                controller.jumpToIssue(issue);
+                // Allow the next identical jump to re-trigger scroll.
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  controller.consumeJumpTarget();
+                });
+              },
+            ),
+            Expanded(
+              child: _buildLogViewer(controller, filtered, matches),
+            ),
+          ],
+        ),
         if (!controller.hasLogs)
           CenteredStateMessage(
             icon: controller.isImported
@@ -439,7 +465,7 @@ class _LogFeatureViewState extends FeatureViewState<LogFeatureView> {
         if (controller.rowSelectionMode || controller.hasSelectedRows) ...[
           const Gap(16),
           Text(
-            '已选择: ${controller.selectedRowCount}',
+            '已选 ${controller.selectedRowCount} 行',
             style: theme.statusBarStyle,
           ),
         ],

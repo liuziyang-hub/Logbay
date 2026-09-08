@@ -54,7 +54,13 @@ class _MirrorFeatureViewState extends FeatureViewState<MirrorFeatureView> {
                   : Icons.play_arrow,
             ),
           ),
-          QualityButton(controller: controller),
+          if (controller.isIosMirror && controller.iosViewerUrl != null)
+            IconButton(
+              tooltip: '在浏览器中打开画面',
+              onPressed: () => controller.openIosViewer(),
+              icon: const Icon(Icons.open_in_browser),
+            ),
+          if (!controller.isIosMirror) QualityButton(controller: controller),
         ],
       ),
       body: Row(
@@ -63,7 +69,8 @@ class _MirrorFeatureViewState extends FeatureViewState<MirrorFeatureView> {
           Expanded(
             child: Center(child: PaneBody(controller: controller)),
           ),
-          MirrorControlStrip(controller: controller),
+          if (!controller.isIosMirror)
+            MirrorControlStrip(controller: controller),
         ],
       ),
     );

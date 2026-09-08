@@ -87,6 +87,14 @@ class WirelessQrPanel extends StatelessWidget {
                     version: QrVersions.auto,
                     size: 220,
                     backgroundColor: Colors.white,
+                    errorStateBuilder: (context, error) => Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Text(
+                        'QR 码渲染失败：$error',
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.bodySmall,
+                      ),
+                    ),
                   ),
                 ),
           const Gap(18),

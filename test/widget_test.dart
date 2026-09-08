@@ -187,10 +187,7 @@ void main() {
   Iterable<double?> messageColumnWidths(WidgetTester tester) {
     return tester
         .widgetList<SizedBox>(
-          find.ancestor(
-            of: find.text('Message'),
-            matching: find.byType(SizedBox),
-          ),
+          find.ancestor(of: find.text('消息'), matching: find.byType(SizedBox)),
         )
         .map((box) => box.width);
   }
@@ -239,9 +236,9 @@ void main() {
 
       expect(items.map((item) => item.label), [
         'Copy',
-        'Copy all',
+        '复制全部',
         'Look up',
-        'Enable selection mode',
+        '开启选择模式',
       ]);
       expect(
         items.where((item) => item.type == ContextMenuButtonType.selectAll),
@@ -267,10 +264,10 @@ void main() {
     );
 
     expect(items.map((item) => item.label), [
-      'Copy',
-      'Copy message',
-      'Copy time + message',
-      'Disable selection mode',
+      '复制整行',
+      '复制消息',
+      '复制时间戳和消息',
+      '关闭选择模式',
     ]);
 
     items.last.onPressed!.call();
@@ -352,7 +349,7 @@ void main() {
       wrapText: false,
       scrollController: scrollController,
     );
-    final initialDx = tester.getTopLeft(find.text('Message')).dx;
+    final initialDx = tester.getTopLeft(find.text('消息')).dx;
 
     await pumpLogViewer(
       tester,
@@ -365,7 +362,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 250));
     await tester.pumpAndSettle();
 
-    final revealedDx = tester.getTopLeft(find.text('Message')).dx;
+    final revealedDx = tester.getTopLeft(find.text('消息')).dx;
     expect(revealedDx, lessThan(initialDx - 100));
   });
 
@@ -391,7 +388,7 @@ void main() {
         ],
       );
 
-      expect(find.text('Paused'), findsOneWidget);
+      expect(find.text('已暂停'), findsOneWidget);
       expect(
         find.text('Paused live logging for emulator-5554.'),
         findsOneWidget,
@@ -460,8 +457,8 @@ void main() {
         find.byKey(const ValueKey('row-selection-toolbar')),
         findsOneWidget,
       );
-      // The SelectionArea stays mounted in row-selection mode; visible text
-      // selection is suppressed via a transparent selection color, not removal.
+      // The SelectionArea stays mounted; visible text selection is suppressed
+      // via a transparent selection color once rows are selected.
       expect(find.byType(SelectionArea), findsOneWidget);
 
       final mouse = await tester.createGesture(
@@ -494,15 +491,15 @@ void main() {
         find.byKey(const ValueKey('row-selection-toolbar')),
         findsOneWidget,
       );
-      expect(find.text('1 row selected'), findsOneWidget);
+      expect(find.text('已选择 1 行'), findsOneWidget);
 
       await tester.tapAt(centers[1]);
       await tester.pumpAndSettle();
 
       expect(find.text('Selected rows: 0,1'), findsOneWidget);
-      expect(find.text('2 rows selected'), findsOneWidget);
+      expect(find.text('已选择 2 行'), findsOneWidget);
 
-      await tester.tap(find.widgetWithText(FilledButton, 'Clear'));
+      await tester.tap(find.text('清除'));
       await tester.pumpAndSettle();
 
       expect(find.text('Selected rows: none'), findsOneWidget);
@@ -629,8 +626,8 @@ void main() {
       await secondaryMouse.up();
       await tester.pumpAndSettle();
 
-      expect(find.text('Copy message'), findsOneWidget);
-      expect(find.text('Copy time + message'), findsOneWidget);
+      expect(find.text('复制消息'), findsOneWidget);
+      expect(find.text('复制时间戳和消息'), findsOneWidget);
       expect(find.byKey(const ValueKey('row-selection-rect')), findsNothing);
     },
   );

@@ -60,6 +60,7 @@ class PreferencesService {
   static const _keyRecentLogFiles = 'recentLogFiles';
   static const _keyTipsEnabled = 'tipsEnabled';
   static const _keyTipRotationIndex = 'tipRotationIndex';
+  static const _keyPreferIosUnifiedLogging = 'preferIosUnifiedLogging';
 
   /// Maximum number of recently opened log files retained for quick re-open.
   static const _maxRecentLogFiles = 10;
@@ -134,6 +135,13 @@ class PreferencesService {
     tipsEnabledListenable.value = v;
     _prefs.setBool(_keyTipsEnabled, v);
   }
+
+  /// Prefer `pymobiledevice3 syslog live` (os_trace) over classic idevicesyslog.
+  /// When the tool is missing, Logbay falls back automatically.
+  static bool get preferIosUnifiedLogging =>
+      _prefs.getBool(_keyPreferIosUnifiedLogging) ?? true;
+  static set preferIosUnifiedLogging(bool v) =>
+      _prefs.setBool(_keyPreferIosUnifiedLogging, v);
 
   /// Monotonic counter used to rotate which tip is shown. Advanced once per app
   /// launch so a different tip surfaces each time the app is opened.
@@ -210,15 +218,27 @@ class PreferencesService {
     _prefs.setDouble(_keyZoomLevel, clamped);
   }
 
-  static LogTabSettings get defaultTabSettings => LogTabSettings(
-    wrapText: wrapText,
-    autoScroll: autoScroll,
-    selectedLogLevel: selectedLogLevel,
-    filterViewMode: filterViewMode,
-    logLinesLimit: logLinesLimit,
-    hiddenColumns: hiddenColumns,
-    columnWidths: columnWidths,
-  );
+  static LogTabSettings get defaultTabSettings => defaultTabSettingsFor(isIos: false);
+
+  /// Platform-aware defaults: iOS syslog is mostly Debug/Notice — default to
+  /// 调试 so lines visible in the in-app debug panel are not hidden by 信息.
+  static LogTabSettings defaultTabSettingsFor({required bool isIos}) {
+    final level = isIos
+        ? LogLevel.fromStored(
+            _prefs.getString(_keySelectedIosLogLevel) ??
+                LogLevel.debug.code,
+          )
+        : selectedLogLevel;
+    return LogTabSettings(
+      wrapText: wrapText,
+      autoScroll: autoScroll,
+      selectedLogLevel: level,
+      filterViewMode: filterViewMode,
+      logLinesLimit: logLinesLimit,
+      hiddenColumns: hiddenColumns,
+      columnWidths: columnWidths,
+    );
+  }
 
   // --- Column widths (stored as single JSON object) ---
 

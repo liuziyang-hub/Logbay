@@ -115,8 +115,8 @@ class LogFilters {
   );
 
   /// Builds a filter from discrete classic-field values. Each field contributes
-  /// a single (trimmed) [FilterTerm.contains] term; the message field filters
-  /// the message column only (no [rawTerms]).
+  /// a single (trimmed) [FilterTerm.contains] term. The message field matches
+  /// against `tag + message` (Studio-style keyword search).
   factory LogFilters.fromFields({
     required LogLevel level,
     String message = '',

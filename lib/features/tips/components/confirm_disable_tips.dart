@@ -8,7 +8,7 @@ Future<bool> confirmDisableTips(BuildContext context) async {
     builder: (context) => AlertDialog(
       title: const Text('关闭提示？'),
       content: const Text(
-        '您将不再在标题栏看到功能提示。'
+        '之后将不再在顶栏显示功能提示。'
         '可随时在设置中重新开启。',
       ),
       actions: [

@@ -15,6 +15,7 @@ class IosSyslogParser {
   IosSyslogParser({DateTime Function()? now}) : _now = now ?? DateTime.now;
 
   static final RegExp _metaEscapePattern = RegExp(r'\\M(?:-|\^|.)');
+  static final RegExp _ansiEscapePattern = RegExp(r'\x1B\[[0-9;]*[A-Za-z]');
 
   static final RegExp _headerPattern = RegExp(
     r'^([A-Z][a-z]{2}\s+\d{1,2}\s+\d\d:\d\d:\d\d(?:\.\d+)?)\s+(.+?)\[(\d+)\]\s+<([^>]+)>:\s?(.*)$',
@@ -39,7 +40,11 @@ class IosSyslogParser {
   _IosSyslogEntryBuilder? _currentEntry;
 
   Iterable<LogEntry> addLine(String line) sync* {
-    final normalizedLine = _decodeMetaEscapes(line);
+    final normalizedLine = _decodeMetaEscapes(_stripAnsi(line));
+    if (normalizedLine.trim().isEmpty) {
+      return;
+    }
+
     final parsedHeader = _IosSyslogEntryBuilder.tryParse(
       normalizedLine,
       now: _now,
@@ -53,7 +58,29 @@ class IosSyslogParser {
       return;
     }
 
-    _currentEntry?.appendContinuation(normalizedLine);
+    if (_currentEntry != null) {
+      _currentEntry!.appendContinuation(normalizedLine);
+      return;
+    }
+
+    // No open entry and not a header — keep the line instead of dropping it
+    // (e.g. preamble / unusual format from older idevicesyslog builds).
+    yield LogEntry(
+      timestamp: '',
+      pid: '',
+      tid: '0',
+      level: LogLevel.info.code,
+      tag: 'idevicesyslog',
+      message: normalizedLine,
+      platform: DevicePlatform.ios,
+    );
+  }
+
+  static String _stripAnsi(String line) {
+    if (!line.contains('\x1B')) {
+      return line;
+    }
+    return line.replaceAll(_ansiEscapePattern, '');
   }
 
   LogEntry? flush() {
@@ -115,44 +142,43 @@ class IosSyslogParser {
     }
   }
 
-  /// Temporary workaround to decode special characters
+  /// Temporary workaround to decode special characters.
+  ///
+  /// idevicesyslog (especially when piped) may emit UTF-8 as cat-v `\M-…`
+  /// escapes mixed with already-decoded Unicode. Decode escape runs to bytes
+  /// and flush them as UTF-8 without aborting on existing non-ASCII chars.
   static String _decodeMetaEscapes(String line) {
     if (!_metaEscapePattern.hasMatch(line)) {
       return line;
     }
 
-    final bytes = <int>[];
-    var changed = false;
+    final buffer = StringBuffer();
+    final pendingBytes = <int>[];
     var index = 0;
+
+    void flushBytes() {
+      if (pendingBytes.isEmpty) return;
+      buffer.write(utf8.decode(pendingBytes, allowMalformed: true));
+      pendingBytes.clear();
+    }
 
     while (index < line.length) {
       if (line.startsWith(r'\M', index)) {
         final decoded = _decodeMetaEscapeToken(line, index);
         if (decoded != null) {
-          bytes.add(decoded.byte);
+          pendingBytes.add(decoded.byte);
           index = decoded.nextIndex;
-          changed = true;
           continue;
         }
       }
 
-      final codeUnit = line.codeUnitAt(index);
-      if (codeUnit > 0x7f) {
-        return line;
-      }
-      bytes.add(codeUnit);
+      flushBytes();
+      buffer.writeCharCode(line.codeUnitAt(index));
       index += 1;
     }
 
-    if (!changed) {
-      return line;
-    }
-
-    try {
-      return utf8.decode(bytes);
-    } catch (_) {
-      return line;
-    }
+    flushBytes();
+    return buffer.toString();
   }
 
   static _DecodedMetaEscape? _decodeMetaEscapeToken(String line, int index) {

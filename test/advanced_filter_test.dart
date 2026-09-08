@@ -204,4 +204,39 @@ void main() {
       expect(recents.package, ['pos']);
     });
   });
+
+  group('keyword search level bypass', () {
+    test('message filter finds debug logs even when priority is info (iOS)', () {
+      final log = _log(
+        level: 'debug',
+        message: '广告管理-竞价 -> 找到当前价值最高的广告返回',
+      );
+      final filters = LogFilters.fromFields(
+        level: LogLevel.info,
+        message: '竞价',
+      );
+      expect(
+        matchesLogFilters(
+          log,
+          filters,
+          LogLevel.info,
+          isIosLogContext: true,
+        ),
+        isTrue,
+      );
+      expect(
+        matchesLogFilters(log, filters, LogLevel.info, isIosLogContext: false),
+        isTrue,
+      );
+    });
+
+    test('level filter still applies without keyword terms', () {
+      final log = _log(level: 'debug', message: 'plain');
+      final filters = LogFilters.fromFields(level: LogLevel.info);
+      expect(
+        matchesLogFilters(log, filters, LogLevel.info, isIosLogContext: true),
+        isFalse,
+      );
+    });
+  });
 }

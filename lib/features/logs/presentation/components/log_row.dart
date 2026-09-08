@@ -4,6 +4,7 @@ import '../../data/models/log_column.dart';
 import '../../data/models/log_entry.dart';
 import '../../../../presentation/theme/app_theme.dart';
 import '../../../../utils/log_entry_utils.dart';
+import '../../../../utils/log_text_spans.dart';
 import '../../../../utils/text_search_pattern.dart';
 import '../log_viewer_constants.dart';
 import 'log_viewer.dart';
@@ -109,8 +110,12 @@ class LogRow extends StatelessWidget {
     final children = <InlineSpan>[];
     final pattern = TextSearchPattern.fromConfig(search);
 
+    void appendPlain(String value, TextStyle baseStyle) {
+      children.addAll(buildLogInlineSpans(value, baseStyle));
+    }
+
     if (!pattern.isActive || highlightColor == null || !pattern.isValid) {
-      children.add(TextSpan(text: text, style: style));
+      appendPlain(text, style);
       if (appendCellSeparator) {
         children.add(_cellSeparatorSpan());
       }
@@ -128,7 +133,7 @@ class LogRow extends StatelessWidget {
 
     final matches = pattern.allMatches(text);
     if (matches.isEmpty) {
-      children.add(TextSpan(text: text, style: style));
+      appendPlain(text, style);
       if (appendCellSeparator) {
         children.add(_cellSeparatorSpan());
       }
@@ -144,26 +149,26 @@ class LogRow extends StatelessWidget {
       );
     }
 
+    final highlightStyleBase = style.copyWith(
+      backgroundColor: highlightColor,
+      color: context.eaglyTheme.searchHighlightForeground,
+    );
+
     var start = 0;
     for (final match in matches) {
       if (match.start > start) {
-        children.add(
-          TextSpan(text: text.substring(start, match.start), style: style),
-        );
+        appendPlain(text.substring(start, match.start), style);
       }
-      children.add(
-        TextSpan(
-          text: text.substring(match.start, match.end),
-          style: style.copyWith(
-            backgroundColor: highlightColor,
-            color: context.eaglyTheme.searchHighlightForeground,
-          ),
+      children.addAll(
+        buildLogInlineSpans(
+          text.substring(match.start, match.end),
+          highlightStyleBase,
         ),
       );
       start = match.end;
     }
     if (start < text.length) {
-      children.add(TextSpan(text: text.substring(start), style: style));
+      appendPlain(text.substring(start), style);
     }
     if (appendCellSeparator) {
       children.add(_cellSeparatorSpan());

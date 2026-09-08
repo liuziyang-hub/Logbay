@@ -75,10 +75,48 @@ abstract class ToolProcessRunner {
     );
     return ToolCommandResult(
       exitCode: result.exitCode,
-      stdout: Utf8Decoder(allowMalformed: true)
-          .convert(result.stdout as List<int>),
-      stderr: Utf8Decoder(allowMalformed: true)
-          .convert(result.stderr as List<int>),
+      stdout: Utf8Decoder(
+        allowMalformed: true,
+      ).convert(result.stdout as List<int>),
+      stderr: Utf8Decoder(
+        allowMalformed: true,
+      ).convert(result.stderr as List<int>),
+    );
+  }
+
+  /// Like [runText], but kills the process and returns exit code `-1` when it
+  /// runs longer than [timeout]. `Process.run` cannot be interrupted, so this
+  /// starts the process instead and collects its output itself — use it for
+  /// commands whose runtime is not bounded by the tool (arbitrary `adb shell`
+  /// lines, libimobiledevice calls against a locked device, …).
+  Future<ToolCommandResult> runTextWithTimeout(
+    List<String> arguments, {
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
+    final process = await startProcess(arguments);
+    const decoder = Utf8Decoder(allowMalformed: true);
+    final stdoutFuture = process.stdout.transform(decoder).join();
+    final stderrFuture = process.stderr.transform(decoder).join();
+
+    var timedOut = false;
+    final exitCode = await process.exitCode.timeout(
+      timeout,
+      onTimeout: () {
+        timedOut = true;
+        process.kill(ProcessSignal.sigkill);
+        return -1;
+      },
+    );
+
+    final stdout = await stdoutFuture;
+    final stderr = await stderrFuture;
+    return ToolCommandResult(
+      exitCode: exitCode,
+      stdout: stdout,
+      stderr: timedOut
+          ? '${stderr.trimRight()}\n'
+                '已超时（${timeout.inSeconds} 秒）并已终止。'
+          : stderr,
     );
   }
 
@@ -119,7 +157,9 @@ abstract class ToolProcessRunner {
   }
 
   Future<String> stderrText(Process process) {
-    return process.stderr.transform(utf8.decoder).join();
+    return process.stderr
+        .transform(const Utf8Decoder(allowMalformed: true))
+        .join();
   }
 
   Future<void> stopProcess(Process? process) async {
@@ -169,19 +209,25 @@ abstract class ToolProcessRunner {
 
   Map<String, String>? _toolEnvironment() {
     final toolDirectory = _toolDirectoryPath();
-    if (toolDirectory == null) {
-      return null;
+    final environment = <String, String>{};
+
+    // Prefer UTF-8 for child tools on Windows (adb / idevicesyslog). Avoids
+    // locale-dependent re-encoding of CJK/emoji before we decode the pipe.
+    if (Platform.isWindows) {
+      environment['PYTHONIOENCODING'] = 'utf-8';
+      environment['LANG'] = 'en_US.UTF-8';
     }
 
-    final environment = <String, String>{};
-    _prependEnvironmentPath(environment, 'PATH', toolDirectory);
+    if (toolDirectory != null) {
+      _prependEnvironmentPath(environment, 'PATH', toolDirectory);
 
-    if (Platform.isWindows) {
-      _prependEnvironmentPath(environment, _windowsPathKey, toolDirectory);
-    } else if (Platform.isLinux) {
-      _prependEnvironmentPath(environment, 'LD_LIBRARY_PATH', toolDirectory);
-    } else if (Platform.isMacOS) {
-      _prependEnvironmentPath(environment, 'DYLD_LIBRARY_PATH', toolDirectory);
+      if (Platform.isWindows) {
+        _prependEnvironmentPath(environment, _windowsPathKey, toolDirectory);
+      } else if (Platform.isLinux) {
+        _prependEnvironmentPath(environment, 'LD_LIBRARY_PATH', toolDirectory);
+      } else if (Platform.isMacOS) {
+        _prependEnvironmentPath(environment, 'DYLD_LIBRARY_PATH', toolDirectory);
+      }
     }
 
     return environment.isEmpty ? null : environment;

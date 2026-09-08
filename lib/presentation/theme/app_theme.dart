@@ -1,5 +1,6 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 import '../../constants/atmosphere_theme.dart';
 import '../../features/logs/data/models/log_level.dart';
@@ -221,6 +222,12 @@ class EaglyTheme extends ThemeExtension<EaglyTheme> {
 
 extension AppThemeContext on BuildContext {
   EaglyTheme get eaglyTheme => Theme.of(this).extension<EaglyTheme>()!;
+
+  /// Scales a fixed chrome dimension (a bar height, a divider) by the app
+  /// zoom, which is applied as a text scale — so boxes with a hardcoded size
+  /// keep fitting the text and icons inside them as the user zooms.
+  double scaled(double dimension) =>
+      MediaQuery.textScalerOf(this).scale(dimension);
 }
 
 class AppTheme {
@@ -578,7 +585,13 @@ class AppTheme {
           ),
         ),
       ),
-      iconTheme: IconThemeData(size: 20, color: colorScheme.onSurfaceVariant),
+      // `applyTextScaling` makes icons follow the app zoom (a text scale)
+      // even where a call site passes an explicit `size`.
+      iconTheme: IconThemeData(
+        size: 20,
+        color: colorScheme.onSurfaceVariant,
+        applyTextScaling: true,
+      ),
       iconButtonTheme: IconButtonThemeData(
         style: ButtonStyle(
           mouseCursor: cursorStyle,
@@ -601,7 +614,11 @@ class AppTheme {
     AtmosphereTheme atmosphere = AtmosphereTheme.lake,
   }) {
     final isDark = colorScheme.brightness == Brightness.dark;
-    final mono = GoogleFonts.jetBrainsMono();
+    // Do NOT use GoogleFonts.jetBrainsMono as the primary log face on desktop:
+    // custom-loaded Latin mono fonts often block CJK/emoji fallback on Windows,
+    // so lines like `广告加载失败❌` render as tofu / PUA boxes while nearby
+    // ASCII stays fine. Prefer a system CJK face, then emoji, then mono.
+    final mono = _logMonoStyle();
 
     return EaglyTheme(
       logBodyStyle: mono.copyWith(fontSize: 12, height: 1.2),
@@ -653,5 +670,48 @@ class AppTheme {
       statusStoppedColor: isDark ? const Color(0xFFF87171) : colorScheme.error,
       cardShadowColor: Colors.black.withValues(alpha: isDark ? 0.18 : 0.04),
     );
+  }
+
+  /// System fonts that reliably cover CJK + emoji in log lines (Android + iOS).
+  static TextStyle _logMonoStyle() {
+    if (Platform.isWindows) {
+      return const TextStyle(
+        fontFamily: 'Microsoft YaHei UI',
+        fontFamilyFallback: [
+          'Microsoft YaHei',
+          'Segoe UI Emoji',
+          'Segoe UI Symbol',
+          'Consolas',
+          'Courier New',
+          'SimSun',
+        ],
+        locale: Locale('zh', 'CN'),
+      );
+    }
+    if (Platform.isMacOS) {
+      return const TextStyle(
+        fontFamily: 'PingFang SC',
+        fontFamilyFallback: [
+          'Hiragino Sans GB',
+          'Apple Color Emoji',
+          'Menlo',
+          'Monaco',
+        ],
+        locale: Locale('zh', 'CN'),
+      );
+    }
+    if (Platform.isLinux) {
+      return const TextStyle(
+        fontFamily: 'Noto Sans CJK SC',
+        fontFamilyFallback: [
+          'Noto Sans SC',
+          'Noto Color Emoji',
+          'DejaVu Sans Mono',
+          'FreeSans',
+        ],
+        locale: Locale('zh', 'CN'),
+      );
+    }
+    return const TextStyle();
   }
 }

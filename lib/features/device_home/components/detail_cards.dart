@@ -268,7 +268,7 @@ class ConnectivityCard extends StatelessWidget {
           icon: connectivity.bluetoothEnabled!
               ? Icons.bluetooth
               : Icons.bluetooth_disabled,
-          label: 'Bluetooth',
+          label: '蓝牙',
           enabled: connectivity.bluetoothEnabled!,
           accent: scheme.tertiary,
         ),

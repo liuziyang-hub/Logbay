@@ -108,10 +108,24 @@ install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   COMPONENT Runtime)
 
 # Copy bundled mobile tools into the app bundle.
+# Exclude scrcpy desktop UI bits (Logbay uses flutter_scrcpy + scrcpy-server only)
+# and FFmpeg DLLs that are installed next to the exe below — avoids ~30MB of dead weight.
 set(MOBILE_TOOLS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../platform-tools/windows")
 if(EXISTS "${MOBILE_TOOLS_DIR}")
   install(DIRECTORY "${MOBILE_TOOLS_DIR}/" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
-    COMPONENT Runtime)
+    COMPONENT Runtime
+    PATTERN "SDL3.dll" EXCLUDE
+    PATTERN "scrcpy.exe" EXCLUDE
+    PATTERN "scrcpy.png" EXCLUDE
+    PATTERN "scrcpy-noconsole.vbs" EXCLUDE
+    PATTERN "open_a_terminal_here.bat" EXCLUDE
+    PATTERN "disconnected.png" EXCLUDE
+    PATTERN "icon.png" EXCLUDE
+    PATTERN "avcodec-*.dll" EXCLUDE
+    PATTERN "avutil-*.dll" EXCLUDE
+    PATTERN "avformat-*.dll" EXCLUDE
+    PATTERN "swresample-*.dll" EXCLUDE
+    PATTERN "swscale-*.dll" EXCLUDE)
 else()
   message(WARNING "Bundled mobile tools were not found at ${MOBILE_TOOLS_DIR}. Run scripts/download_platform_tools.sh first.")
 endif()

@@ -9,6 +9,7 @@ import '../../../session/device_session_controller.dart';
 import '../data/device_info.dart';
 import '../device_home_controller.dart';
 import 'home_primitives.dart';
+import '../../../presentation/theme/app_theme.dart';
 
 /// Top-of-screen identity banner: who the device is, whether it is ready to
 /// work with, and the one action most sessions start with (install a build).
@@ -40,7 +41,10 @@ class DeviceHeroCard extends StatelessWidget {
     final device = session.device;
     final identity = info.identity;
     final isIos = device is IosDevice;
-    final wireless = device is AndroidDevice && device.isWireless;
+    final wireless = switch (device) {
+      AndroidDevice(:final isWireless) => isWireless,
+      IosDevice(:final isWireless) => isWireless,
+    };
 
     final osLabel = identity.osVersion == null
         ? (isIos ? 'iOS' : 'Android')
@@ -75,9 +79,7 @@ class DeviceHeroCard extends StatelessWidget {
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
                       StatusPill(
-                        label: device.isConnected
-                            ? '在线'
-                            : device.statusLabel,
+                        label: device.isConnected ? '在线' : device.statusLabel,
                         tone: device.isConnected
                             ? StatusTone.good
                             : StatusTone.bad,
@@ -87,11 +89,10 @@ class DeviceHeroCard extends StatelessWidget {
                         label: osLabel,
                         icon: isIos ? Icons.apple : Icons.android,
                       ),
-                      if (!isIos)
-                        StatusPill(
-                          label: wireless ? 'Wi-Fi' : 'USB',
-                          icon: wireless ? Icons.wifi : Icons.usb,
-                        ),
+                      StatusPill(
+                        label: wireless ? '无线' : '有线',
+                        icon: wireless ? Icons.wifi : Icons.usb,
+                      ),
                       if (identity.cpuArchitecture != null)
                         StatusPill(
                           label: identity.cpuArchitecture!,
@@ -133,8 +134,8 @@ class _PlatformBadge extends StatelessWidget {
     final theme = Theme.of(context);
     final isIos = device is IosDevice;
     return Container(
-      width: 46,
-      height: 46,
+      width: context.scaled(46),
+      height: context.scaled(46),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft,
@@ -187,9 +188,7 @@ class _InstallAction extends StatelessWidget {
                 )
               : const Icon(Icons.system_update_outlined, size: 17),
           label: Text(
-            installing
-                ? '正在安装 ${session.installingAppName ?? "应用"}…'
-                : '安装应用',
+            installing ? '正在安装 ${session.installingAppName ?? "应用"}…' : '安装应用',
           ),
         ),
         const Gap(6),

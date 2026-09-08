@@ -911,10 +911,14 @@ class AdbTool extends ToolProcessRunner {
       onListen: () async {
         logInfo('Starting logcat for $deviceId');
         try {
+          // `-b all` matches Android Studio Logcat: main/system/crash/events/radio.
+          // Default buffers alone omit a large share of device log lines.
           process = await startProcess([
             '-s',
             deviceId,
             'logcat',
+            '-b',
+            'all',
             '-v',
             'threadtime',
           ]);
@@ -1015,7 +1019,7 @@ class AdbTool extends ToolProcessRunner {
 
   Future<void> clearLogs(String deviceId) async {
     logInfo('Clearing adb logcat buffer for $deviceId');
-    await runText(['-s', deviceId, 'logcat', '-c']);
+    await runText(['-s', deviceId, 'logcat', '-b', 'all', '-c']);
   }
 
   /// Captures the device framebuffer as PNG bytes via `screencap`.

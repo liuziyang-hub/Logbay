@@ -1,10 +1,12 @@
 import 'package:eagly/features/home_screen/components/context_menu_helper.dart';
+import 'package:eagly/presentation/theme/app_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:gap/gap.dart';
 import 'package:window_manager/window_manager.dart';
 import '../../session/device_session_manager.dart';
 import '../tips/tips_controller.dart';
 import '../tips/tips_header_panel.dart';
+import '../updates/update_chip.dart';
 import 'components/brand.dart';
 import 'components/device_tab_strip.dart';
 import 'components/github_star_button.dart';
@@ -90,7 +92,7 @@ class AppHeader extends StatelessWidget {
                         ),
                         const Gap(6),
                         SizedBox(
-                          height: 22,
+                          height: context.scaled(22),
                           child: VerticalDivider(
                             width: 2,
                             thickness: 1,
@@ -98,6 +100,8 @@ class AppHeader extends StatelessWidget {
                           ),
                         ),
                         const Gap(4),
+                        const AppUpdateChip(),
+                        const Gap(2),
                         const GitHubStarButton(),
                         const Gap(2),
                         HeaderAction(

@@ -74,17 +74,19 @@ class FeatureRail extends StatelessWidget {
                             RailButton(
                               icon: Icons.terminal_outlined,
                               label: '终端',
-                              isActive: session.isAdbShellOpen,
+                              isActive: session.isTerminalOpen,
                               enabled:
-                                  session.canAdbShell || session.isAdbShellOpen,
-                              tooltip: session.canAdbShell
-                                  ? (session.isAdbShellOpen
+                                  session.canUseTerminal ||
+                                  session.isTerminalOpen,
+                              tooltip: session.canUseTerminal
+                                  ? (session.isTerminalOpen
                                         ? '隐藏终端'
-                                        : '打开终端')
-                                  : '终端仅支持已连接的 Android 设备',
+                                        : '打开终端（设备命令行）')
+                                  : '导入日志工作区不支持终端',
                               onTap:
-                                  session.canAdbShell || session.isAdbShellOpen
-                                  ? session.toggleAdbShell
+                                  session.canUseTerminal ||
+                                      session.isTerminalOpen
+                                  ? session.toggleTerminal
                                   : null,
                             ),
                             RailButton(
@@ -97,7 +99,7 @@ class FeatureRail extends StatelessWidget {
                                   ? (session.isMirrorOpen
                                         ? '隐藏屏幕镜像'
                                         : '打开屏幕镜像')
-                                  : '屏幕镜像仅支持已连接的 Android 设备',
+                                  : '请先连接设备后再使用屏幕镜像',
                               onTap:
                                   session.canMirror || session.isMirrorOpen
                                   ? session.toggleMirror
@@ -148,6 +150,16 @@ class FeatureRail extends StatelessWidget {
                                   ? session.toggleApps
                                   : null,
                             ),
+                            if (session.canRunUtilities)
+                              RailButton(
+                                icon: Icons.handyman_outlined,
+                                label: '工具',
+                                isActive: session.isUtilitiesOpen,
+                                tooltip: session.isUtilitiesOpen
+                                    ? '隐藏工具'
+                                    : '运行设备命令',
+                                onTap: session.toggleUtilities,
+                              ),
                             RailButton(
                               icon: session.isInstallingApp
                                   ? Icons.hourglass_top_rounded

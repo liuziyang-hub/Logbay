@@ -119,6 +119,8 @@ extension LogEntryExt on LogEntry {
     LogColumn.tid => isIos ? pid : '$pid/$tid',
     LogColumn.level => isSpecialEntry ? typeLabel : level,
     LogColumn.tag => tag,
+    LogColumn.subsystem => subsystem ?? '',
+    LogColumn.category => category ?? '',
     LogColumn.message => message,
   };
 

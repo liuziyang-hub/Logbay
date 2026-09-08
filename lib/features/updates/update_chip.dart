@@ -6,15 +6,17 @@ import 'package:updat/updat.dart';
 
 import 'components/update_pill.dart';
 
-/// A quiet header pill that surfaces app updates. It wraps [UpdatWidget] — which
-/// checks the latest GitHub release once on mount — with a compact chip that
-/// matches the muted header styling.
-///
-/// Only *actionable* states render anything: available, downloading, and
-/// ready-to-install. Checking / up-to-date / dismissed / error all collapse to
-/// nothing, so the header never nags on a normal or offline launch.
-class AppUpdateChip extends StatelessWidget {
+/// Header pill: tap → download → silent overwrite install on Windows.
+class AppUpdateChip extends StatefulWidget {
   const AppUpdateChip({super.key});
+
+  @override
+  State<AppUpdateChip> createState() => _AppUpdateChipState();
+}
+
+class _AppUpdateChipState extends State<AppUpdateChip> {
+  String? _pendingInstallVersion;
+  bool _installStarted = false;
 
   @override
   Widget build(BuildContext context) {
@@ -49,24 +51,33 @@ class AppUpdateChip extends StatelessWidget {
           icon: Icons.system_update_alt_rounded,
           label: '更新',
           tooltip: latestVersion == null
-              ? '有新版本可用'
-              : '有可用更新 — v$latestVersion',
-          onTap: openDialog,
+              ? '有新版本可用 — 点击下载并静默安装'
+              : '有可用更新 v$latestVersion — 点击下载并静默覆盖安装',
+          onTap: () {
+            _pendingInstallVersion = latestVersion;
+            _installStarted = false;
+            startUpdate();
+          },
         );
       case UpdatStatus.downloading:
         return const UpdatePill(
           busy: true,
-          label: '更新中…',
+          label: '下载中…',
           tooltip: '正在下载更新…',
         );
       case UpdatStatus.readyToInstall:
-        return UpdatePill(
-          icon: Icons.check_circle_rounded,
-          label: '重启',
-          tooltip: '退出 Logbay 并打开已下载的安装程序',
-          onTap: latestVersion == null
-              ? null
-              : () => _confirmQuitAndInstall(context, latestVersion),
+        final version = latestVersion ?? _pendingInstallVersion;
+        if (!_installStarted && version != null) {
+          _installStarted = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            _silentInstall(context, version);
+          });
+        }
+        return const UpdatePill(
+          busy: true,
+          label: '安装中…',
+          tooltip: '即将退出并静默覆盖安装',
         );
       case UpdatStatus.error:
       case UpdatStatus.checking:
@@ -77,32 +88,10 @@ class AppUpdateChip extends StatelessWidget {
     }
   }
 
-  Future<void> _confirmQuitAndInstall(
+  Future<void> _silentInstall(
     BuildContext context,
     String latestVersion,
   ) async {
-    final shouldInstall = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('退出 Logbay 以安装更新？'),
-        content: Text(
-          'Logbay 将退出，然后打开已下载的 v$latestVersion 安装程序。'
-          '继续前请保存未完成的工作。',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('退出并安装'),
-          ),
-        ],
-      ),
-    );
-    if (shouldInstall != true || !context.mounted) return;
-
     try {
       await AppUpdateService.quitAndOpenInstaller(latestVersion);
     } on Object catch (error) {

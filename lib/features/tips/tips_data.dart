@@ -14,7 +14,7 @@ const List<Tip> kTips = [
     title: '隐藏不常用的列',
     detail:
         '日志表格的列数往往超出实际需要。右键点击任意列标题即可显示或隐藏各列——'
-        '精简为仅保留消息列，或在需要时加回 PID、标记和时间。',
+        '精简为仅保留消息列，或在需要时加回 PID、标记和时间戳。',
     actionHint: '在日志视图中右键点击列标题',
   ),
   Tip(
@@ -70,7 +70,7 @@ const List<Tip> kTips = [
     detail:
         '除日志外，还可在应用内镜像设备屏幕，'
         '便于在复现问题时同时观察界面与日志流。',
-    actionHint: '在设备侧栏中选择「屏幕镜像」功能',
+    actionHint: '在设备侧栏中选择「镜像」功能',
   ),
   Tip(
     id: 'device-home',
@@ -84,11 +84,11 @@ const List<Tip> kTips = [
   Tip(
     id: 'adb-shell',
     icon: Icons.terminal_outlined,
-    title: '内置 ADB 终端',
+    title: '内置终端',
     detail:
-        '无需另开命令行：在「终端」面板直接进入设备 shell，'
-        '执行调试命令、查看属性或排查问题。',
-    actionHint: '在已连接的 Android 设备上打开「终端」',
+        '无需另开命令行：在「终端」面板直接运行 adb / idevice 命令，'
+        'Android 还可隐式进入设备 shell。',
+    actionHint: '在已连接的设备上打开「终端」',
   ),
   Tip(
     id: 'crash-reports',
@@ -100,21 +100,21 @@ const List<Tip> kTips = [
     actionHint: '在设备侧栏中打开「崩溃报告」功能',
   ),
   Tip(
-    id: 'wireless-adb',
-    icon: Icons.wifi_tethering,
-    title: '通过 Wi‑Fi 调试 Android',
+    id: 'ios-unified-log',
+    icon: Icons.apple,
+    title: 'iOS 统一日志（os_trace）',
     detail:
-        '拔掉数据线——无线连接 Android 设备并通过网络流式传输 Logcat。'
-        '配对一次后，随时可从标题栏重新连接。',
-    actionHint: '点击标题栏中的「无线 ADB」图标',
+        '默认优先使用 pymobiledevice3 拉取统一日志（含更多 Debug/Info）。'
+        '若本机未安装会自动回退 idevicesyslog；可在设置中开关。',
+    actionHint: '设置 → iOS 统一日志',
   ),
   Tip(
-    id: 'font-size',
-    icon: Icons.format_size_outlined,
-    title: '快速调整日志字号',
+    id: 'app-view-logs',
+    icon: Icons.article_outlined,
+    title: '从应用列表只看它的日志',
     detail:
-        '让密集日志更易阅读：使用键盘快捷键增大或减小日志字号，'
-        '或在设置中指定默认值。',
-    actionHint: '查看日志时按 Cmd/Ctrl 与 + 或 −',
+        '在「应用」中右键目标 App，选择「查看日志」。'
+        '会新开标签页并按包名过滤，Android 还会跟随进程 PID（重启后仍跟得住）。',
+    actionHint: '应用 → 右键 → 查看日志',
   ),
 ];

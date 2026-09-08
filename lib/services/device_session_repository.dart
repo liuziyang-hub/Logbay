@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -9,16 +10,28 @@ import '../features/device_home/data/device_performance_stats.dart';
 import '../features/device_home/data/installed_app_info.dart';
 import '../features/device_info/data/device_details.dart';
 import '../features/logs/data/models/log_entry.dart';
+import '../features/terminal/data/terminal_line.dart';
+import '../features/terminal/data/terminal_process.dart';
+import '../features/terminal/data/terminal_tools.dart';
+import '../features/utilities/data/utility_command.dart';
 import '../features/wireless_connection/data/wireless_debug_models.dart';
 import '../features/app_log/app_logger.dart';
 import '../features/flutter_scrcpy/flutter_scrcpy.dart';
 import '../utils/tools_path.dart';
 import 'tools/adb_tool.dart';
 import 'tools/android_apk_icon_extractor.dart';
+import 'tools/device_tool_runner.dart';
 import 'tools/idevice_crash_report_tool.dart';
 import 'tools/idevice_info_tool.dart';
 import 'tools/ideviceinstaller_tool.dart';
 import 'tools/idevice_syslog_tool.dart';
+import 'tools/ios_unified_log_tool.dart';
+import 'tools/ios_mirror_tool.dart';
+import 'tools/ios_screenshot_tool.dart';
+import 'tools/tool_process_runner.dart';
+import 'preferences_service.dart';
+import '../utils/log_entry_utils.dart';
+import '../features/logs/data/models/log_level.dart';
 
 /// Per-device facade over the platform tools (adb / libimobiledevice / scrcpy).
 ///
@@ -30,9 +43,12 @@ class DeviceSessionRepository {
   final AdbTool _adbTool;
   final IdeviceInstallerTool _ideviceInstallerTool;
   final IdeviceSyslogTool _ideviceSyslogTool;
+  final IosUnifiedLogTool _iosUnifiedLogTool;
   final IdeviceCrashReportTool _ideviceCrashReportTool;
   final IdeviceInfoTool _ideviceInfoTool;
   final ScrcpyMirror _scrcpyMirror;
+  final IosMirrorTool _iosMirrorTool;
+  final IosScreenshotTool _iosScreenshotTool;
   final AppLogger _logger = AppLogger(source: 'DeviceSessionService');
   final Map<String, String> _pidToPackageCache = {};
 
@@ -62,6 +78,7 @@ class DeviceSessionRepository {
     AdbTool? adbTool,
     IdeviceInstallerTool? ideviceInstallerTool,
     IdeviceSyslogTool? ideviceSyslogTool,
+    IosUnifiedLogTool? iosUnifiedLogTool,
     IdeviceCrashReportTool? ideviceCrashReportTool,
     IdeviceInfoTool? ideviceInfoTool,
     ScrcpyMirror? scrcpyMirror,
@@ -72,6 +89,9 @@ class DeviceSessionRepository {
        _ideviceSyslogTool =
            ideviceSyslogTool ??
            IdeviceSyslogTool(executablePath: ideviceSyslogPath),
+       _iosUnifiedLogTool = iosUnifiedLogTool ?? IosUnifiedLogTool(),
+       _iosMirrorTool = IosMirrorTool(),
+       _iosScreenshotTool = IosScreenshotTool(),
        _ideviceCrashReportTool =
            ideviceCrashReportTool ??
            IdeviceCrashReportTool(executablePath: ideviceCrashReportPath),
@@ -80,8 +100,13 @@ class DeviceSessionRepository {
            ScrcpyMirror(
              adbExecutablePath:
                  resolveBundledExecutablePath('adb') ?? adbPath ?? 'adb',
-             serverJarPath:
-                 '${resolveBundledToolsDirectory()?.path}/scrcpy-server',
+             serverJarPath: () {
+               final tools = resolveBundledToolsDirectory();
+               if (tools == null) {
+                 return 'scrcpy-server';
+               }
+               return '${tools.path}${Platform.pathSeparator}scrcpy-server';
+             }(),
              onLog: (message) => AppLogger(
                source: 'DeviceSessionService',
              ).info('[scrcpy] $message'),
@@ -136,27 +161,91 @@ class DeviceSessionRepository {
     final sessionLogger = _sessionLogger;
     _activeStreamCount++;
 
-    sessionLogger.info('iOS syslog stream started for ${device.displayName}');
-
-    final session = _ideviceSyslogTool.start(
-      deviceId: _deviceId,
-      processName: device.displayName,
-    );
-
     try {
-      await for (final entry in session.stream) {
-        if (entry.type == LogEntryType.error) {
-          sessionLogger.error(
-            'Tool error while streaming iOS logs for ${device.displayName}',
-            detail: '[${entry.tag}] ${entry.message}',
-          );
+      final preferUnified = PreferencesService.preferIosUnifiedLogging;
+      final unifiedAvailable =
+          preferUnified && await IosUnifiedLogTool.isAvailable();
+
+      sessionLogger.info(
+        unifiedAvailable
+            ? 'iOS unified log (os_trace) started for ${device.displayName}'
+            : 'iOS syslog stream started for ${device.displayName}',
+      );
+
+      if (preferUnified && !unifiedAvailable) {
+        yield LogEntryUtils.buildSpecial(
+          type: LogEntryType.notice,
+          timestamp: '',
+          tag: 'os_trace',
+          level: LogLevel.info.code,
+          message:
+              '未检测到 pymobiledevice3，已回退 idevicesyslog。'
+              '安装：pip install -U pymobiledevice3',
+          processName: device.displayName,
+        );
+      }
+
+      final session = unifiedAvailable
+          ? _iosUnifiedLogTool.start(
+              deviceId: _deviceId,
+              processName: device.displayName,
+            )
+          : _ideviceSyslogTool.start(
+              deviceId: _deviceId,
+              processName: device.displayName,
+            );
+
+      var sawUnifiedErrorWithoutLogs = false;
+      var emittedDataLogs = false;
+
+      try {
+        await for (final entry in session.stream) {
+          if (entry.type == LogEntryType.error) {
+            sessionLogger.error(
+              'Tool error while streaming iOS logs for ${device.displayName}',
+              detail: '[${entry.tag}] ${entry.message}',
+            );
+            if (unifiedAvailable && !emittedDataLogs) {
+              sawUnifiedErrorWithoutLogs = true;
+            }
+          } else if (entry.type == LogEntryType.log) {
+            emittedDataLogs = true;
+          }
+          yield entry;
         }
-        yield entry;
+      } finally {
+        await session.stop();
+      }
+
+      // If unified logging failed to produce any real lines, fall back once.
+      if (unifiedAvailable && sawUnifiedErrorWithoutLogs && !emittedDataLogs) {
+        sessionLogger.warning(
+          'os_trace produced no logs; falling back to idevicesyslog',
+        );
+        yield LogEntryUtils.buildSpecial(
+          type: LogEntryType.notice,
+          timestamp: '',
+          tag: 'os_trace',
+          level: LogLevel.warning.code,
+          message: '统一日志启动失败，已回退 idevicesyslog',
+          processName: device.displayName,
+        );
+
+        final fallback = _ideviceSyslogTool.start(
+          deviceId: _deviceId,
+          processName: device.displayName,
+        );
+        try {
+          await for (final entry in fallback.stream) {
+            yield entry;
+          }
+        } finally {
+          await fallback.stop();
+        }
       }
     } finally {
       _activeStreamCount--;
-      sessionLogger.info('iOS syslog stream stopped for ${device.displayName}');
-      await session.stop();
+      sessionLogger.info('iOS log stream stopped for ${device.displayName}');
     }
   }
 
@@ -352,6 +441,53 @@ class DeviceSessionRepository {
     }
   }
 
+  // ── Utilities feature (generic tool invocations) ────────────────────────
+
+  /// Lazily-created runners for the utility tools, keyed by tool. `adb` reuses
+  /// the session's [AdbTool] so utility commands go through the same server
+  /// startup handling as everything else.
+  final Map<UtilityTool, ToolProcessRunner> _utilityRunners = {};
+
+  ToolProcessRunner _utilityRunner(UtilityTool tool) {
+    if (tool == UtilityTool.adb) return _adbTool;
+    return _utilityRunners[tool] ??= DeviceToolRunner(
+      executableName: tool.executable,
+    );
+  }
+
+  /// Runs one [invocation] against the bound device, prepending the tool's
+  /// device selector (`adb -s <serial>` / `idevicefoo -u <udid>`). Never
+  /// throws: a failure to even start the tool comes back as a non-zero
+  /// [ToolCommandResult] carrying the error text.
+  Future<ToolCommandResult> runUtility(
+    UtilityInvocation invocation, {
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
+    final runner = _utilityRunner(invocation.tool);
+    final arguments = [
+      invocation.tool.deviceFlag,
+      _deviceId,
+      ...invocation.arguments,
+    ];
+    _sessionLogger.info('Running utility: ${invocation.displayCommand}');
+    try {
+      if (invocation.tool == UtilityTool.adb) {
+        await _adbTool.ensureServerRunning();
+      }
+      return await runner.runTextWithTimeout(arguments, timeout: timeout);
+    } catch (error) {
+      _sessionLogger.error(
+        'Utility failed: ${invocation.displayCommand}',
+        detail: error.toString(),
+      );
+      return ToolCommandResult(
+        exitCode: -1,
+        stdout: '',
+        stderr: error.toString(),
+      );
+    }
+  }
+
   Future<DeviceCommandResult> installApp({required String filePath}) {
     return switch (device) {
       AndroidDevice() => _adbTool.installApk(
@@ -401,9 +537,7 @@ class DeviceSessionRepository {
   /// app without a mounted developer disk image).
   Future<DeviceCommandResult> launchApp(String packageName) {
     if (device is! AndroidDevice) {
-      throw UnsupportedError(
-        '目前仅支持在 Android 设备上打开应用。',
-      );
+      throw UnsupportedError('目前仅支持在 Android 设备上打开应用。');
     }
     return _adbTool.launchApp(_deviceId, packageName);
   }
@@ -411,9 +545,7 @@ class DeviceSessionRepository {
   /// Force-stops [packageName]. Android only.
   Future<DeviceCommandResult> forceStopApp(String packageName) {
     if (device is! AndroidDevice) {
-      throw UnsupportedError(
-        '目前仅支持在 Android 设备上强制停止应用。',
-      );
+      throw UnsupportedError('目前仅支持在 Android 设备上强制停止应用。');
     }
     return _adbTool.forceStopApp(_deviceId, packageName);
   }
@@ -422,9 +554,7 @@ class DeviceSessionRepository {
   /// caller must confirm with the user first.
   Future<DeviceCommandResult> clearAppData(String packageName) {
     if (device is! AndroidDevice) {
-      throw UnsupportedError(
-        '目前仅支持在 Android 设备上清除应用数据。',
-      );
+      throw UnsupportedError('目前仅支持在 Android 设备上清除应用数据。');
     }
     return _adbTool.clearAppData(_deviceId, packageName);
   }
@@ -432,9 +562,7 @@ class DeviceSessionRepository {
   /// Opens the OS "App info" settings screen for [packageName]. Android only.
   Future<void> openAppInfoSettings(String packageName) {
     if (device is! AndroidDevice) {
-      throw UnsupportedError(
-        '目前仅支持在 Android 设备上打开应用信息。',
-      );
+      throw UnsupportedError('目前仅支持在 Android 设备上打开应用信息。');
     }
     return _adbTool.openAppInfoSettings(_deviceId, packageName);
   }
@@ -489,9 +617,7 @@ class DeviceSessionRepository {
   /// up. Throws [UnsupportedError] for non-iOS devices.
   Future<CrashReportPullResult> pullCrashReports() {
     if (device is! IosDevice) {
-      throw UnsupportedError(
-        '崩溃报告读取仅适用于 iOS 设备。',
-      );
+      throw UnsupportedError('崩溃报告读取仅适用于 iOS 设备。');
     }
     _sessionLogger.info('Reading crash reports for ${device.displayName}');
     return _ideviceCrashReportTool.pullReports(_deviceId);
@@ -501,9 +627,7 @@ class DeviceSessionRepository {
     ScrcpyVideoOptions? options,
   }) async {
     if (device is! AndroidDevice) {
-      throw UnsupportedError(
-        '目前仅支持在 Android 设备上进行屏幕镜像。',
-      );
+      throw UnsupportedError('Android 屏幕镜像仅适用于 Android 设备。');
     }
     try {
       return options != null
@@ -515,8 +639,26 @@ class DeviceSessionRepository {
     }
   }
 
-  /// Captures a full-resolution PNG screenshot via `screencap`.
+  /// iOS 17+ mirror via pymobiledevice3 `display serve-web` (browser HEVC).
+  ///
+  /// Audio is enabled by default. Pass [noAudio] to start with `--no-audio`.
+  Future<IosMirrorSession> startIosScreenMirror({bool noAudio = false}) async {
+    if (device is! IosDevice) {
+      throw UnsupportedError('iOS 屏幕镜像仅适用于 iOS 设备。');
+    }
+    try {
+      return await _iosMirrorTool.start(udid: _deviceId, noAudio: noAudio);
+    } catch (error) {
+      _logger.error('Failed to start iOS mirror', detail: error.toString());
+      rethrow;
+    }
+  }
+
+  /// Captures a full-resolution PNG screenshot (Android screencap or iOS pmd3).
   Future<Uint8List> captureScreenshot() {
+    if (device is IosDevice) {
+      return _iosScreenshotTool.capture(udid: _deviceId);
+    }
     return _adbTool.captureScreenshotPng(_deviceId);
   }
 
@@ -556,6 +698,104 @@ class DeviceSessionRepository {
 
   String? getProcessNameFromPid(String pid) {
     return _pidToPackageCache[pid];
+  }
+
+  // ── Terminal feature (free-form tool invocations) ────────────────────────
+
+  /// Lazily-created runners for bundled CLIs, keyed by executable name.
+  /// `adb` reuses the session's [AdbTool] so ad-hoc commands go through the
+  /// same server startup handling as everything else.
+  final Map<String, ToolProcessRunner> _toolRunners = {};
+
+  ToolProcessRunner _toolRunner(String executableName) {
+    if (executableName == _adbExecutableName) return _adbTool;
+    return _toolRunners[executableName] ??= DeviceToolRunner(
+      executableName: executableName,
+    );
+  }
+
+  static const _adbExecutableName = 'adb';
+
+  /// Starts [invocation] and hands back a live [TerminalProcessSession].
+  ///
+  /// The argv arrives fully formed — the terminal resolves the device selector
+  /// itself. Throws when the tool cannot be started at all.
+  Future<TerminalProcessSession> startTerminalProcess(
+    TerminalInvocation invocation,
+  ) async {
+    final runner = _toolRunner(invocation.executable);
+    _sessionLogger.info('Terminal: ${invocation.displayCommand}');
+    if (invocation.executable == _adbExecutableName) {
+      await _adbTool.ensureServerRunning();
+    }
+
+    final process = await runner.startProcess(invocation.arguments);
+    final output = StreamController<TerminalOutputChunk>();
+    const decoder = Utf8Decoder(allowMalformed: true);
+
+    var openPipes = 2;
+    void closePipe() {
+      if (--openPipes == 0 && !output.isClosed) unawaited(output.close());
+    }
+
+    StreamSubscription<String> pipe(Stream<List<int>> source, bool isError) {
+      return source
+          .transform(decoder)
+          .transform(const LineSplitter())
+          .listen(
+            (line) {
+              if (!output.isClosed) {
+                output.add(TerminalOutputChunk(line, isError: isError));
+              }
+            },
+            onError: (Object error) {
+              if (!output.isClosed) {
+                output.add(
+                  TerminalOutputChunk(error.toString(), isError: true),
+                );
+              }
+            },
+            onDone: closePipe,
+          );
+    }
+
+    pipe(process.stdout, false);
+    pipe(process.stderr, true);
+
+    return TerminalProcessSession(
+      output: output.stream,
+      exitCode: process.exitCode,
+      onKill: () async {
+        process.kill(ProcessSignal.sigterm);
+        try {
+          await process.exitCode.timeout(const Duration(seconds: 2));
+        } on TimeoutException {
+          process.kill(ProcessSignal.sigkill);
+        }
+      },
+      onInput: (text) {
+        try {
+          process.stdin.writeln(text);
+        } catch (_) {
+          // Process exited between check and write.
+        }
+      },
+    );
+  }
+
+  /// PIDs currently mapped to [packageName] (exact or substring match on the
+  /// process/package column from `ps`). Used for package-follow filtering.
+  Set<String> pidsForPackage(String packageName) {
+    final needle = packageName.trim().toLowerCase();
+    if (needle.isEmpty) return const {};
+    final matches = <String>{};
+    _pidToPackageCache.forEach((pid, pkg) {
+      final value = pkg.toLowerCase();
+      if (value == needle || value.contains(needle) || needle.contains(value)) {
+        matches.add(pid);
+      }
+    });
+    return matches;
   }
 }
 

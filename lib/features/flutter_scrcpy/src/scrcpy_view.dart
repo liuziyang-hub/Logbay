@@ -39,14 +39,24 @@ class ScrcpyView extends StatelessWidget {
         child: LayoutBuilder(
           builder: (context, constraints) {
             final size = constraints.biggest;
-            return Listener(
-              onPointerDown: (e) =>
-                  _emit(ScrcpyTouchAction.down, e.localPosition, size),
-              onPointerMove: (e) =>
-                  _emit(ScrcpyTouchAction.move, e.localPosition, size),
-              onPointerUp: (e) =>
-                  _emit(ScrcpyTouchAction.up, e.localPosition, size),
-              child: Texture(textureId: textureId),
+            // Texture often fails hit-testing; opaque so the whole video
+            // rect receives mouse / touch and can drive the device.
+            return MouseRegion(
+              cursor: onTouch != null
+                  ? SystemMouseCursors.click
+                  : SystemMouseCursors.basic,
+              child: Listener(
+                behavior: HitTestBehavior.opaque,
+                onPointerDown: (e) =>
+                    _emit(ScrcpyTouchAction.down, e.localPosition, size),
+                onPointerMove: (e) =>
+                    _emit(ScrcpyTouchAction.move, e.localPosition, size),
+                onPointerUp: (e) =>
+                    _emit(ScrcpyTouchAction.up, e.localPosition, size),
+                onPointerCancel: (e) =>
+                    _emit(ScrcpyTouchAction.up, e.localPosition, size),
+                child: Texture(textureId: textureId),
+              ),
             );
           },
         ),
