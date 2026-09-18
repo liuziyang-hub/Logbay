@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../features/app_log/app_logger.dart';
 import 'ios_developer_image_tool.dart';
+import 'ios_mirror_diagnostics.dart';
 import 'ios_wireless_tool.dart';
 import 'pymobiledevice3_launcher.dart';
 
@@ -58,7 +59,7 @@ class IosMirrorTool {
   final IosDeveloperImageTool _imageTool;
   final IosWirelessTool _wirelessTool;
 
-  static const minimumStableVersion = Pymobiledevice3Version(11, 15, 4);
+  static const minimumRecommendedVersion = Pymobiledevice3Version(11, 13, 1);
 
   static Future<bool> isAvailable() => Pymobiledevice3Launcher.isAvailable();
 
@@ -84,6 +85,7 @@ class IosMirrorTool {
     }
 
     await _checkCompatibility(command: command, udid: udid);
+    await _checkServeWebCapability(command);
 
     try {
       await _imageTool.ensureMounted(udid: udid, onProgress: onProgress);
@@ -222,6 +224,33 @@ class IosMirrorTool {
     if (issue != null) throw UnsupportedError(issue);
   }
 
+  Future<void> _checkServeWebCapability(Pymobiledevice3Command command) async {
+    try {
+      final result = await Process.run(
+        command.executable,
+        command.args([
+          'developer',
+          'core-device',
+          'display',
+          'serve-web',
+          '--help',
+        ]),
+        runInShell: Platform.isWindows,
+      ).timeout(const Duration(seconds: 12));
+      final output = '${result.stdout}\n${result.stderr}'.toLowerCase();
+      if (result.exitCode != 0 ||
+          (!output.contains('serve-web') && !output.contains('http-port'))) {
+        throw const IosMirrorException(
+          '当前 iOS 运行时不包含实时投屏能力。请升级 Logbay 内置运行时后重试。',
+        );
+      }
+    } on IosMirrorException {
+      rethrow;
+    } catch (error) {
+      throw IosMirrorException('检查 iOS 投屏能力失败：$error');
+    }
+  }
+
   @visibleForTesting
   static String? compatibilityIssue({
     String? productVersion,
@@ -230,15 +259,9 @@ class IosMirrorTool {
     final iosMajor = productVersion == null
         ? null
         : int.tryParse(productVersion.trim().split('.').first);
-    if (iosMajor != null && iosMajor < 27) {
-      return '当前设备为 iOS $productVersion。CoreDevice 实时投屏需要 iOS 27 或以上。\n'
-          '你仍可使用“截图”功能查看当前画面；升级系统后可启用实时投屏和鼠标控制。';
-    }
-    if (installedVersion != null &&
-        installedVersion.compareTo(minimumStableVersion) < 0) {
-      return '当前 pymobiledevice3 版本为 $installedVersion，实时投屏需要 '
-          '$minimumStableVersion 或以上。\n'
-          '请执行：pip install -U pymobiledevice3，然后重新启动 Logbay。';
+    if (iosMajor != null && iosMajor < 17) {
+      return '当前设备为 iOS $productVersion。CoreDevice 实时投屏需要 iOS 17 或以上。\n'
+          '你仍可使用“截图”功能查看当前画面。';
     }
     return null;
   }
@@ -251,16 +274,7 @@ class IosMirrorTool {
 
   @visibleForTesting
   static String friendlyServerFailure(String raw) {
-    if (_requiresNewerIos(raw)) {
-      return '此设备的系统不支持 CoreDevice 实时投屏；设备端要求 iOS 27 或以上。\n'
-          '你仍可使用“截图”功能查看当前画面。';
-    }
-    final lower = raw.toLowerCase();
-    if (lower.contains('camera') || lower.contains('microphone')) {
-      return '无法开始 iOS 投屏：相机或麦克风正被其他应用占用。'
-          '请关闭相机、录音等应用后重试。';
-    }
-    return 'iOS 投屏服务返回错误：\n${raw.trim()}';
+    return IosMirrorDiagnostic.classify(raw).userMessage;
   }
 
   static Future<void> openUrl(String url) async {
@@ -340,8 +354,9 @@ class IosMirrorTool {
 }
 
 class IosMirrorException implements Exception {
-  IosMirrorException(this.message);
+  const IosMirrorException(this.message, {this.diagnostic});
   final String message;
+  final IosMirrorDiagnostic? diagnostic;
 
   @override
   String toString() => message;
