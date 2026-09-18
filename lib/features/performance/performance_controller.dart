@@ -21,12 +21,20 @@ class PerformanceController extends FeatureController {
   String? _errorMessage;
   int _generation = 0;
   bool _disposed = false;
+  double paneWidth = 760;
 
   PerformanceCollectionState get state => _state;
   PerformanceSession? get currentSession => _currentSession;
   List<PerformanceSample> get samples => _currentSession?.samples ?? const [];
   String? get errorMessage => _errorMessage;
   bool get isRunning => _state == PerformanceCollectionState.running;
+
+  void setPaneWidth(double width) {
+    final clamped = width.clamp(420.0, 1200.0);
+    if (clamped == paneWidth) return;
+    paneWidth = clamped;
+    _notify();
+  }
 
   Future<void> start({
     String? applicationId,

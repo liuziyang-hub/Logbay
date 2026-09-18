@@ -10,6 +10,7 @@ import '../../device_info/device_info_feature_view.dart';
 import '../../file_manager/file_manager_feature_view.dart';
 import '../../logs/log_feature_view.dart';
 import '../../mirror/mirror_feature_view.dart';
+import '../../performance/performance_feature_view.dart';
 import '../../terminal/terminal_feature_view.dart';
 import '../../utilities/utilities_feature_view.dart';
 import 'android_unauthorized_guidance.dart';
@@ -70,7 +71,10 @@ class DeviceScreenContent extends StatelessWidget {
 }
 
 class _Workspace extends StatelessWidget {
-  const _Workspace({required this.session, required this.appMemoryBytesListenable});
+  const _Workspace({
+    required this.session,
+    required this.appMemoryBytesListenable,
+  });
 
   final DeviceSessionController session;
   final ValueListenable<int> appMemoryBytesListenable;
@@ -85,6 +89,7 @@ class _Workspace extends StatelessWidget {
     final deviceInfo = session.deviceInfoController;
     final terminal = session.terminalSessionManager;
     final utilities = session.utilitiesController;
+    final performance = session.performanceController;
 
     // Open features split the full width proportionally to their pane widths,
     // so no empty space remains; the dividers still resize them by ratio.
@@ -98,6 +103,7 @@ class _Workspace extends StatelessWidget {
         deviceInfo,
         terminal,
         utilities,
+        performance,
       ]),
       builder: (context, _) => Row(
         children: [
@@ -207,6 +213,19 @@ class _Workspace extends StatelessWidget {
               onResize: utilities.setPaneWidth,
             ),
           ],
+          if (session.isPerformanceOpen) ...[
+            Expanded(
+              flex: performance.paneWidth.round(),
+              child: PerformanceFeatureView(
+                controller: performance,
+                onClose: session.closePerformance,
+              ),
+            ),
+            PaneResizeHandle(
+              paneWidth: () => performance.paneWidth,
+              onResize: performance.setPaneWidth,
+            ),
+          ],
         ],
       ),
     );
@@ -228,31 +247,19 @@ Widget? _guidanceForDevice(Device device) {
         message:
             'iPhone 正在询问是否信任此电脑。\n'
             '请拿起手机，在弹窗上点「信任」。',
-        steps: [
-          '解锁你的 iPhone',
-          '在「信任此电脑」弹窗上点「信任」',
-          '如需要，输入手机密码',
-        ],
+        steps: ['解锁你的 iPhone', '在「信任此电脑」弹窗上点「信任」', '如需要，输入手机密码'],
       ),
       'locked' => const IosGuidance(
         icon: Icons.lock_outline,
         title: 'iPhone 已锁定',
-        message:
-            '你的 iPhone 处于锁定状态。请解锁并信任此电脑后继续。',
-        steps: [
-          '使用面容 / 指纹 / 密码解锁 iPhone',
-          '如弹出「信任此电脑」，请点「信任」',
-        ],
+        message: '你的 iPhone 处于锁定状态。请解锁并信任此电脑后继续。',
+        steps: ['使用面容 / 指纹 / 密码解锁 iPhone', '如弹出「信任此电脑」，请点「信任」'],
       ),
       'unavailable' => const IosGuidance(
         icon: Icons.usb_off_outlined,
         title: '设备不可用',
         message: '无法与 iPhone 通信，请按下面步骤排查。',
-        steps: [
-          '解锁你的 iPhone',
-          '拔掉再重新插入 USB 线',
-          '如弹出提示，请点「信任此电脑」',
-        ],
+        steps: ['解锁你的 iPhone', '拔掉再重新插入 USB 线', '如弹出提示，请点「信任此电脑」'],
       ),
       _ => null,
     };
