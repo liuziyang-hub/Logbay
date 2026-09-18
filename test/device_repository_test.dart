@@ -7,6 +7,7 @@ import 'package:eagly/services/devices_repository.dart';
 import 'package:eagly/services/tools/adb_tool.dart';
 import 'package:eagly/services/tools/idevice_id_tool.dart';
 import 'package:eagly/services/tools/idevice_info_tool.dart';
+import 'package:eagly/services/tools/ios_wireless_tool.dart';
 
 void main() {
   late _FakeAdbTool adbTool;
@@ -22,6 +23,7 @@ void main() {
       adbTool: adbTool,
       ideviceIdTool: ideviceIdTool,
       ideviceInfoTool: ideviceInfoTool,
+      iosWirelessTool: _FakeIosWirelessTool(),
     );
   });
 
@@ -211,4 +213,9 @@ class _FakeIdeviceInfoTool extends IdeviceInfoTool {
     return iosInfos[deviceId] ??
         IosDeviceInfo(deviceId: deviceId, status: 'device');
   }
+}
+
+class _FakeIosWirelessTool extends IosWirelessTool {
+  @override
+  Future<List<UsbmuxDeviceEntry>> listUsbmuxDevices() async => const [];
 }

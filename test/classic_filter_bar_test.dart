@@ -3,6 +3,7 @@ import 'package:eagly/features/logs/data/models/log_level.dart';
 import 'package:eagly/presentation/theme/app_theme.dart';
 import 'package:eagly/presentation/theme/log_level_presentation.dart';
 import 'package:eagly/features/logs/presentation/components/classic_filter_bar.dart';
+import 'package:eagly/features/logs/presentation/components/filter_bar_shared.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -104,10 +105,10 @@ void main() {
 
     expect(find.byType(LogLevelLabel), findsOneWidget);
 
-    await tester.tap(find.byType(DropdownButtonFormField<LogLevel>));
+    await tester.tap(find.byType(LogLevelDropdown));
     await tester.pumpAndSettle();
 
     expect(find.byType(LogLevelLabel), findsWidgets);
-    expect(find.text('Fatal (F)'), findsWidgets);
+    expect(find.text('严重错误 (F)'), findsWidgets);
   });
 }

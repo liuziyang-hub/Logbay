@@ -84,3 +84,9 @@ docs/universe-kits.html
 .tmp/
 *.part
 assets/videos/*_raw.mp4
+assets/videos/*.full.mp4
+assets/videos/*_original_bak.mp4
+
+# Local diagnostics and one-off smoke-test output
+/.tmp_*
+/tmp_*

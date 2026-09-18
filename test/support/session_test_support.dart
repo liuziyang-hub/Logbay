@@ -19,6 +19,8 @@ import 'package:eagly/services/device_session_repository.dart';
 import 'package:eagly/services/tools/adb_tool.dart';
 import 'package:eagly/services/tools/idevice_id_tool.dart';
 import 'package:eagly/services/tools/idevice_info_tool.dart';
+import 'package:eagly/services/tools/ios_mirror_tool.dart';
+import 'package:eagly/services/tools/ios_wireless_tool.dart';
 import 'package:eagly/services/tools/tool_process_runner.dart';
 
 LogTabSettings testSettings({
@@ -72,6 +74,7 @@ class FakeSessionService extends DeviceSessionRepository {
 
   int startLogStreamCount = 0;
   int startedMirrorCount = 0;
+  int startedIosMirrorCount = 0;
   int stoppedMirrorCount = 0;
   int pingCount = 0;
   int recoverCount = 0;
@@ -124,7 +127,6 @@ class FakeSessionService extends DeviceSessionRepository {
     return deviceInfoToReturn;
   }
 
-
   @override
   Future<DeviceCommandResult> installApp({required String filePath}) async {
     installRequests.add(filePath);
@@ -153,6 +155,15 @@ class FakeSessionService extends DeviceSessionRepository {
         }
       },
     );
+  }
+
+  @override
+  Future<IosMirrorSession> startIosScreenMirror({
+    bool noAudio = false,
+    void Function(String message)? onProgress,
+  }) async {
+    startedIosMirrorCount++;
+    return IosMirrorSession(viewerUrl: 'http://127.0.0.1:9/');
   }
 
   // ── Apps feature ──────────────────────────────────────────────────────────
@@ -327,4 +338,9 @@ class FakeIdeviceIdTool extends IdeviceIdTool {
 
 class FakeIdeviceInfoTool extends IdeviceInfoTool {
   FakeIdeviceInfoTool() : super(executablePath: '/usr/bin/true');
+}
+
+class FakeIosWirelessTool extends IosWirelessTool {
+  @override
+  Future<List<UsbmuxDeviceEntry>> listUsbmuxDevices() async => const [];
 }

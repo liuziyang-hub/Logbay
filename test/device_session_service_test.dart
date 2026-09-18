@@ -93,7 +93,7 @@ exit 0
 
     expect(result.isSuccess, isTrue);
     expect(result.message, contains('Successfully paired'));
-  });
+  }, skip: Platform.isWindows ? 'POSIX shell fixture' : false);
 
   test(
     'connectDevice treats failed output as a failure even with exit code 0',
@@ -105,6 +105,7 @@ exit 0
       expect(result.isSuccess, isFalse);
       expect(result.error, contains('failed to connect to 127.0.0.1:5555'));
     },
+    skip: Platform.isWindows ? 'POSIX shell fixture' : false,
   );
 
   test('installApp installs APKs on Android devices via adb', () async {
@@ -116,7 +117,7 @@ exit 0
 
     expect(result.isSuccess, isTrue);
     expect(result.message, contains('Success'));
-  });
+  }, skip: Platform.isWindows ? 'POSIX shell fixture' : false);
 
   test(
     'installApp installs IPA or app bundles on iOS devices via ideviceinstaller',
@@ -132,6 +133,7 @@ exit 0
       expect(result.isSuccess, isTrue);
       expect(result.message, contains('Complete'));
     },
+    skip: Platform.isWindows ? 'POSIX shell fixture' : false,
   );
 }
 
@@ -142,6 +144,7 @@ Future<String> _writeExecutable(
 ) async {
   final file = File('${directory.path}/$name');
   await file.writeAsString(content);
+  if (Platform.isWindows) return file.path;
   final chmodResult = await Process.run('chmod', ['+x', file.path]);
   if (chmodResult.exitCode != 0) {
     throw StateError('Failed to mark ${file.path} executable');

@@ -22,7 +22,7 @@ void main() {
 
       expect(level.isUnknown, isTrue);
       expect(level.code, 'panic');
-      expect(level.label, 'Unknown');
+      expect(level.label, '未知');
       expect(level.hierarchy, LogLevel.unknown.hierarchy);
     });
 
@@ -53,11 +53,11 @@ void main() {
       expect(LogLevel.normalizeIosStoredLevel('panic'), 'panic');
     });
 
-    test('uses Fatal as the Android-facing display label for F', () {
+    test('uses the localized Android-facing display label for F', () {
       expect(LogLevel.androidValues, contains(LogLevel.fault));
-      expect(LogLevel.fault.displayLabel(isIos: false), 'Fatal');
-      expect(LogLevel.fault.labelWithDisplayCode(isIos: false), 'Fatal (F)');
-      expect(LogLevel.fault.displayLabel(isIos: true), 'Fault');
+      expect(LogLevel.fault.displayLabel(isIos: false), '严重错误');
+      expect(LogLevel.fault.labelWithDisplayCode(isIos: false), '严重错误 (F)');
+      expect(LogLevel.fault.displayLabel(isIos: true), '严重错误');
     });
   });
 }

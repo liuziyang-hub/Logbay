@@ -642,12 +642,19 @@ class DeviceSessionRepository {
   /// iOS 17+ mirror via pymobiledevice3 `display serve-web` (browser HEVC).
   ///
   /// Audio is enabled by default. Pass [noAudio] to start with `--no-audio`.
-  Future<IosMirrorSession> startIosScreenMirror({bool noAudio = false}) async {
+  Future<IosMirrorSession> startIosScreenMirror({
+    bool noAudio = false,
+    void Function(String message)? onProgress,
+  }) async {
     if (device is! IosDevice) {
       throw UnsupportedError('iOS 屏幕镜像仅适用于 iOS 设备。');
     }
     try {
-      return await _iosMirrorTool.start(udid: _deviceId, noAudio: noAudio);
+      return await _iosMirrorTool.start(
+        udid: _deviceId,
+        noAudio: noAudio,
+        onProgress: onProgress,
+      );
     } catch (error) {
       _logger.error('Failed to start iOS mirror', detail: error.toString());
       rethrow;

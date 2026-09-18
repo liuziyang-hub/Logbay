@@ -49,14 +49,16 @@ void main() {
     expect(service.startedMirrorCount, 1);
   });
 
-  test('mirror is unsupported for iOS devices', () async {
+  test('mirror starts for a connected iOS device', () async {
     final mirror = createMirror(
       withDevice: Device.ios('00008110-001234567890801E', 'device'),
     );
 
     await mirror.start();
 
-    expect(mirror.screenMirrorState, ScreenMirrorState.unsupported);
+    expect(mirror.screenMirrorState, ScreenMirrorState.running);
+    expect(mirror.iosViewerUrl, 'http://127.0.0.1:9/');
+    expect(service.startedIosMirrorCount, 1);
     expect(service.startedMirrorCount, 0);
   });
 

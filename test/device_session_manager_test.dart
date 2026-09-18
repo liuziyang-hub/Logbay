@@ -34,6 +34,7 @@ void main() {
       adbTool: adbTool,
       ideviceIdTool: ideviceIdTool,
       ideviceInfoTool: ideviceInfoTool,
+      iosWirelessTool: FakeIosWirelessTool(),
     );
     tempDir = Directory.systemTemp.createTempSync('device-session-test');
   });
@@ -159,7 +160,7 @@ void main() {
       final result = await session.installDroppedPaths([apk.path]);
 
       expect(result.isSuccess, isTrue);
-      expect(result.message, contains('Installed sample.apk'));
+      expect(result.message, contains('已在 emulator-5554 上安装 sample.apk'));
     });
 
     test('rejects an incompatible installable for the device', () async {
@@ -180,7 +181,7 @@ void main() {
       ]);
 
       expect(result.isSuccess, isFalse);
-      expect(result.error, contains('single app binary'));
+      expect(result.error, contains('一次只拖放一个应用安装包'));
     });
 
     test('installs a compatible APK dropped onto the device screen', () async {
@@ -192,7 +193,7 @@ void main() {
       expect(result, isNotNull);
       expect(result!.installed, ['sample.apk']);
       expect(result.errors, isEmpty);
-      expect(result.message, contains('Installed sample.apk'));
+      expect(result.message, contains('已安装 sample.apk'));
     });
 
     test(
@@ -225,7 +226,7 @@ void main() {
 
       expect(result, isNotNull);
       expect(result!.installed, isEmpty);
-      expect(result.errors.single, contains('Reconnect'));
+      expect(result.errors.single, contains('请先重新连接'));
     });
   });
 

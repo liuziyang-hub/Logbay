@@ -36,9 +36,7 @@ class _MirrorFeatureViewState extends FeatureViewState<MirrorFeatureView> {
         onClose: widget.onClose,
         actions: [
           IconButton(
-            tooltip: controller.isScreenMirrorRunning
-                ? '停止镜像'
-                : '开始镜像',
+            tooltip: controller.isScreenMirrorRunning ? '停止镜像' : '开始镜像',
             onPressed: controller.canStart || controller.isScreenMirrorRunning
                 ? () {
                     if (controller.isScreenMirrorRunning) {
@@ -67,10 +65,14 @@ class _MirrorFeatureViewState extends FeatureViewState<MirrorFeatureView> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Expanded(
-            child: Center(child: PaneBody(controller: controller)),
+            child:
+                controller.isIosMirror &&
+                    controller.isScreenMirrorRunning &&
+                    controller.iosViewerUrl != null
+                ? PaneBody(controller: controller)
+                : Center(child: PaneBody(controller: controller)),
           ),
-          if (!controller.isIosMirror)
-            MirrorControlStrip(controller: controller),
+          MirrorControlStrip(controller: controller),
         ],
       ),
     );

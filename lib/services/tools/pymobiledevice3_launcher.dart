@@ -1,5 +1,38 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
+
+@immutable
+class Pymobiledevice3Version implements Comparable<Pymobiledevice3Version> {
+  const Pymobiledevice3Version(this.major, this.minor, this.patch);
+
+  final int major;
+  final int minor;
+  final int patch;
+
+  static Pymobiledevice3Version? parse(String raw) {
+    final match = RegExp(r'(\d+)\.(\d+)\.(\d+)').firstMatch(raw);
+    if (match == null) return null;
+    return Pymobiledevice3Version(
+      int.parse(match.group(1)!),
+      int.parse(match.group(2)!),
+      int.parse(match.group(3)!),
+    );
+  }
+
+  @override
+  int compareTo(Pymobiledevice3Version other) {
+    final majorResult = major.compareTo(other.major);
+    if (majorResult != 0) return majorResult;
+    final minorResult = minor.compareTo(other.minor);
+    if (minorResult != 0) return minorResult;
+    return patch.compareTo(other.patch);
+  }
+
+  @override
+  String toString() => '$major.$minor.$patch';
+}
+
 /// Resolves how to invoke `pymobiledevice3` on this host.
 class Pymobiledevice3Command {
   const Pymobiledevice3Command(this.executable, this.prefixArgs);
@@ -27,14 +60,32 @@ class Pymobiledevice3Launcher {
 
   static Future<bool> isAvailable() async => (await resolve()) != null;
 
+  /// Returns the installed CLI version, or `null` when an older build does
+  /// not expose a parseable `version` command.
+  static Future<Pymobiledevice3Version?> installedVersion({
+    Pymobiledevice3Command? command,
+  }) async {
+    final resolved = command ?? await resolve();
+    if (resolved == null) return null;
+    try {
+      final result = await Process.run(
+        resolved.executable,
+        resolved.args(['version']),
+        runInShell: Platform.isWindows,
+      ).timeout(const Duration(seconds: 10));
+      return Pymobiledevice3Version.parse('${result.stdout}\n${result.stderr}');
+    } catch (_) {
+      return null;
+    }
+  }
+
   static Future<Pymobiledevice3Command?> _probe() async {
     for (final candidate in _candidates()) {
       try {
-        final result = await Process.run(
-          candidate.executable,
-          [...candidate.prefixArgs, '--help'],
-          runInShell: Platform.isWindows,
-        );
+        final result = await Process.run(candidate.executable, [
+          ...candidate.prefixArgs,
+          '--help',
+        ], runInShell: Platform.isWindows);
         final out = '${result.stdout}\n${result.stderr}'.toLowerCase();
         if (result.exitCode == 0 ||
             out.contains('syslog') ||
@@ -51,11 +102,17 @@ class Pymobiledevice3Launcher {
 
   static List<Pymobiledevice3Command> _candidates() {
     if (Platform.isWindows) {
-      return const [
-        Pymobiledevice3Command('pymobiledevice3', []),
-        Pymobiledevice3Command('py', ['-3', '-m', 'pymobiledevice3']),
-        Pymobiledevice3Command('python', ['-m', 'pymobiledevice3']),
-        Pymobiledevice3Command('python3', ['-m', 'pymobiledevice3']),
+      final appData = Platform.environment['APPDATA'];
+      return [
+        if (appData != null)
+          Pymobiledevice3Command(
+            '$appData\\uv\\tools\\pymobiledevice3\\Scripts\\pymobiledevice3.exe',
+            const [],
+          ),
+        const Pymobiledevice3Command('pymobiledevice3', []),
+        const Pymobiledevice3Command('py', ['-3', '-m', 'pymobiledevice3']),
+        const Pymobiledevice3Command('python', ['-m', 'pymobiledevice3']),
+        const Pymobiledevice3Command('python3', ['-m', 'pymobiledevice3']),
       ];
     }
     return const [

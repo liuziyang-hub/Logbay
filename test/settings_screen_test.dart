@@ -26,7 +26,7 @@ void main() {
 
   testWidgets(
     'settings screen persists theme mode changes',
-    skip: 'ThemeMode toggle replaced by atmosphere themes',
+    skip: true, // ThemeMode toggle replaced by atmosphere themes.
     (WidgetTester tester) async {
     await tester.pumpWidget(
       MaterialApp(

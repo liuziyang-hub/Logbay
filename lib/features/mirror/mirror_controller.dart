@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
@@ -79,6 +80,9 @@ class MirrorController extends FeatureController {
   /// Default false = audio on (CLI does not pass `--no-audio`).
   bool iosAudioMuted = false;
 
+  /// Live status while iOS DDI mount / serve-web is starting.
+  String? iosPrepareHint;
+
   /// Number of consecutive automatic restarts (e.g. from rotation desyncs).
   /// Reset once a stream has survived longer than [_restartCooldown]; caps a
   /// restart storm from an app that bounces orientation before settling.
@@ -89,7 +93,7 @@ class MirrorController extends FeatureController {
 
   ScrcpyMirrorSession? get screenMirrorSession => _session;
 
-  /// iOS serve-web session (HEVC in system browser), if running.
+  /// iOS serve-web session (in-pane WebView on Windows), if running.
   IosMirrorSession? get iosMirrorSession => _iosSession;
 
   /// Viewer URL for iOS mirror, or null when not running.
@@ -217,6 +221,7 @@ class MirrorController extends FeatureController {
     final generation = ++_startGeneration;
     screenMirrorState = ScreenMirrorState.starting;
     screenMirrorError = null;
+    iosPrepareHint = '正在检查开发者镜像…';
     AppBreadcrumbs.action(
       'Starting iOS screen mirror for ${device.displayName}',
       category: 'mirror',
@@ -224,15 +229,13 @@ class MirrorController extends FeatureController {
     _notify();
 
     try {
-      final available = await IosMirrorTool.isAvailable();
-      if (!available) {
-        throw IosMirrorException(
-          '未找到 pymobiledevice3。请在 Python 环境中安装该工具，'
-          '并完成开发者镜像挂载后再试。',
-        );
-      }
-
-      final mirror = await service.startIosScreenMirror(noAudio: iosAudioMuted);
+      final mirror = await service.startIosScreenMirror(
+        noAudio: iosAudioMuted,
+        onProgress: (message) {
+          iosPrepareHint = message;
+          _notify();
+        },
+      );
       if (_disposed || generation != _startGeneration) {
         await mirror.stop();
         return;
@@ -240,6 +243,7 @@ class MirrorController extends FeatureController {
 
       _iosSession = mirror;
       _sessionStartedAt = DateTime.now();
+      iosPrepareHint = null;
       screenMirrorState = ScreenMirrorState.running;
       AppBreadcrumbs.action(
         'iOS screen mirror running for ${device.displayName}',
@@ -247,26 +251,32 @@ class MirrorController extends FeatureController {
       );
       _notify();
 
-      // Open the upstream WebCodecs viewer (includes touch controls).
-      try {
-        await mirror.openViewer();
-      } catch (_) {
-        // Viewer open is best-effort; session stays alive.
+      // Windows embeds the viewer in-pane. Other desktops still open
+      // the system browser (no WebView2 embed there).
+      if (!Platform.isWindows) {
+        try {
+          await mirror.openViewer();
+        } catch (_) {
+          // Viewer open is best-effort; session stays alive.
+        }
       }
 
       unawaited(_watchIosExit(mirror, generation));
     } on IosMirrorException catch (error) {
       if (generation != _startGeneration || _disposed) return;
+      iosPrepareHint = null;
       screenMirrorState = ScreenMirrorState.error;
       screenMirrorError = error.message;
       _notify();
     } on UnsupportedError catch (error) {
       if (generation != _startGeneration || _disposed) return;
+      iosPrepareHint = null;
       screenMirrorState = ScreenMirrorState.unsupported;
       screenMirrorError = error.message;
       _notify();
     } catch (error) {
       if (generation != _startGeneration || _disposed) return;
+      iosPrepareHint = null;
       screenMirrorState = ScreenMirrorState.error;
       screenMirrorError = describeError(error);
       _notify();
@@ -377,9 +387,7 @@ class MirrorController extends FeatureController {
     screenMirrorState = exitCode == 0
         ? ScreenMirrorState.stopped
         : ScreenMirrorState.error;
-    screenMirrorError = exitCode == 0
-        ? null
-        : '屏幕镜像已停止（退出码 $exitCode）。';
+    screenMirrorError = exitCode == 0 ? null : '屏幕镜像已停止（退出码 $exitCode）。';
     _notify();
   }
 
