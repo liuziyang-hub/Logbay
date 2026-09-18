@@ -12,6 +12,7 @@ import '../features/device_info/data/device_details.dart';
 import '../features/logs/data/models/log_entry.dart';
 import '../features/performance/services/device_performance_backend.dart';
 import '../features/performance/android/android_performance_backend.dart';
+import '../features/performance/ios/ios_performance_backend.dart';
 import '../features/terminal/data/terminal_line.dart';
 import '../features/terminal/data/terminal_process.dart';
 import '../features/terminal/data/terminal_tools.dart';
@@ -312,9 +313,7 @@ class DeviceSessionRepository {
         adbTool: _adbTool,
         deviceId: _deviceId,
       ),
-      IosDevice() => const UnavailableDevicePerformanceBackend(
-        '当前 iOS 性能采集运行时尚未初始化。',
-      ),
+      IosDevice() => IosPerformanceBackend(deviceId: _deviceId),
     };
   }
 
