@@ -1546,4 +1546,19 @@ class AdbTool extends ToolProcessRunner {
       ...arguments,
     ], timeout: timeout);
   }
+
+  /// Runs a bounded raw adb command without inserting `shell`.
+  Future<ToolCommandResult> runAdbCommand(
+    List<String> arguments, {
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
+    await ensureServerRunning();
+    return runTextWithTimeout(arguments, timeout: timeout);
+  }
+
+  /// Runs a raw adb command and returns its binary stdout.
+  Future<List<int>> runAdbBytes(List<String> arguments) async {
+    await ensureServerRunning();
+    return runBytes(arguments);
+  }
 }
