@@ -426,7 +426,6 @@ class AdbTool extends ToolProcessRunner {
     return (mcc: trimmed.substring(0, 3), mnc: trimmed.substring(3));
   }
 
-
   /// Starts an interactive `adb shell` for [deviceId]. Caller owns the process
   /// (stdin/stdout) and must kill it when done.
   Future<Process> startInteractiveShell(String deviceId) async {
@@ -482,7 +481,8 @@ class AdbTool extends ToolProcessRunner {
             prop('ro.product.manufacturer') != null)
           DeviceDetailsRow(
             label: '品牌',
-            value: _normalizeAndroidBrand(
+            value:
+                _normalizeAndroidBrand(
                   _firstNonEmpty(
                     prop('ro.product.brand'),
                     prop('ro.product.manufacturer'),
@@ -525,29 +525,23 @@ class AdbTool extends ToolProcessRunner {
             value: prop('ro.build.version.sdk')!,
           ),
         if (prop('ro.build.display.id') != null)
-          DeviceDetailsRow(
-            label: '系统版本号',
-            value: prop('ro.build.display.id')!,
-          ),
+          DeviceDetailsRow(label: '系统版本号', value: prop('ro.build.display.id')!),
         if (prop('ro.build.id') != null)
           DeviceDetailsRow(label: 'Build ID', value: prop('ro.build.id')!),
         if (prop('ro.product.cpu.abi') != null)
-          DeviceDetailsRow(label: 'CPU ABI', value: prop('ro.product.cpu.abi')!),
+          DeviceDetailsRow(
+            label: 'CPU ABI',
+            value: prop('ro.product.cpu.abi')!,
+          ),
         if (prop('ro.hardware') != null)
           DeviceDetailsRow(label: '硬件', value: prop('ro.hardware')!),
         if (prop('gsm.version.baseband') != null)
-          DeviceDetailsRow(
-            label: '基带',
-            value: prop('gsm.version.baseband')!,
-          ),
+          DeviceDetailsRow(label: '基带', value: prop('gsm.version.baseband')!),
       ];
 
       final batteryRows = <DeviceDetailsRow>[
         if (battery['level'] != null)
-          DeviceDetailsRow(
-            label: '电量',
-            value: '${battery['level']}%',
-          ),
+          DeviceDetailsRow(label: '电量', value: '${battery['level']}%'),
         if (battery['status'] != null)
           DeviceDetailsRow(
             label: '充电状态',
@@ -577,10 +571,7 @@ class AdbTool extends ToolProcessRunner {
       final mem = performance?.memory;
       if (cpu != null) {
         perfRows.add(
-          DeviceDetailsRow(
-            label: 'CPU 核心',
-            value: '${cpu.coreCount}',
-          ),
+          DeviceDetailsRow(label: 'CPU 核心', value: '${cpu.coreCount}'),
         );
         perfRows.add(
           DeviceDetailsRow(
@@ -600,16 +591,10 @@ class AdbTool extends ToolProcessRunner {
       }
       if (mem != null) {
         perfRows.add(
-          DeviceDetailsRow(
-            label: '内存总量',
-            value: _formatKb(mem.totalKb),
-          ),
+          DeviceDetailsRow(label: '内存总量', value: _formatKb(mem.totalKb)),
         );
         perfRows.add(
-          DeviceDetailsRow(
-            label: '可用内存',
-            value: _formatKb(mem.availableKb),
-          ),
+          DeviceDetailsRow(label: '可用内存', value: _formatKb(mem.availableKb)),
         );
         perfRows.add(
           DeviceDetailsRow(
@@ -725,10 +710,7 @@ class AdbTool extends ToolProcessRunner {
     try {
       final result = await runText(['mdns', 'services']);
       if (!result.isSuccess) {
-        final details = describeCommandFailure(
-          '发现无线 ADB 服务失败。',
-          result,
-        );
+        final details = describeCommandFailure('发现无线 ADB 服务失败。', result);
         logError('Failed to discover wireless ADB services', details);
         return WirelessServiceDiscoveryResult.failure(error: details);
       }
@@ -775,8 +757,7 @@ class AdbTool extends ToolProcessRunner {
     } catch (error) {
       logError('Exception while discovering mdns services', error);
       return WirelessServiceDiscoveryResult.failure(
-        error:
-            '发现无线 ADB 服务失败：${describeError(error)}',
+        error: '发现无线 ADB 服务失败：${describeError(error)}',
       );
     }
   }
@@ -789,10 +770,7 @@ class AdbTool extends ToolProcessRunner {
     try {
       final result = await runText(['pair', address, pairingCode]);
       if (!result.isSuccess) {
-        final details = describeCommandFailure(
-          '与 $address 配对失败。',
-          result,
-        );
+        final details = describeCommandFailure('与 $address 配对失败。', result);
         logError('Pair command failed for $address', details);
         return DeviceCommandResult.failure(error: details);
       }
@@ -800,9 +778,7 @@ class AdbTool extends ToolProcessRunner {
       final message = result.combinedOutput;
       logSuccess('Paired with $address');
       return DeviceCommandResult.success(
-        message: message.isEmpty
-            ? '已成功与 $address 配对。'
-            : message,
+        message: message.isEmpty ? '已成功与 $address 配对。' : message,
       );
     } catch (error) {
       logError('Exception while pairing with $address', error);
@@ -821,10 +797,7 @@ class AdbTool extends ToolProcessRunner {
           !result.isSuccess || output.toLowerCase().contains('failed');
 
       if (failed) {
-        final details = describeCommandFailure(
-          '连接 $address 失败。',
-          result,
-        );
+        final details = describeCommandFailure('连接 $address 失败。', result);
         logError('Connect command failed for $address', details);
         return DeviceCommandResult.failure(error: details);
       }
@@ -1263,10 +1236,7 @@ class AdbTool extends ToolProcessRunner {
       final failed =
           !result.isSuccess || output.toLowerCase().contains('failure');
       if (failed) {
-        final details = describeCommandFailure(
-          '卸载 $packageName 失败。',
-          result,
-        );
+        final details = describeCommandFailure('卸载 $packageName 失败。', result);
         logError('Uninstall failed for $packageName on $deviceId', details);
         return DeviceCommandResult.failure(error: details);
       }
@@ -1306,10 +1276,7 @@ class AdbTool extends ToolProcessRunner {
           output.contains('no activities found') ||
           output.contains('aborting');
       if (failed) {
-        final details = describeCommandFailure(
-          '打开 $packageName 失败。',
-          result,
-        );
+        final details = describeCommandFailure('打开 $packageName 失败。', result);
         logError('Launch failed for $packageName on $deviceId', details);
         return DeviceCommandResult.failure(error: details);
       }
@@ -1337,16 +1304,11 @@ class AdbTool extends ToolProcessRunner {
         packageName,
       ]);
       if (!result.isSuccess) {
-        final details = describeCommandFailure(
-          '强制停止 $packageName 失败。',
-          result,
-        );
+        final details = describeCommandFailure('强制停止 $packageName 失败。', result);
         logError('Force-stop failed for $packageName on $deviceId', details);
         return DeviceCommandResult.failure(error: details);
       }
-      return DeviceCommandResult.success(
-        message: '已强制停止 $packageName。',
-      );
+      return DeviceCommandResult.success(message: '已强制停止 $packageName。');
     } catch (error) {
       logError(
         'Exception while force-stopping $packageName on $deviceId',
@@ -1385,9 +1347,7 @@ class AdbTool extends ToolProcessRunner {
         return DeviceCommandResult.failure(error: details);
       }
 
-      return DeviceCommandResult.success(
-        message: '已清除 $packageName 的数据。',
-      );
+      return DeviceCommandResult.success(message: '已清除 $packageName 的数据。');
     } catch (error) {
       logError(
         'Exception while clearing data for $packageName on $deviceId',
@@ -1570,5 +1530,20 @@ class AdbTool extends ToolProcessRunner {
     flush();
 
     return apps;
+  }
+
+  /// Runs one bounded shell command for performance and diagnostics features.
+  Future<ToolCommandResult> runShellCommand(
+    String deviceId,
+    List<String> arguments, {
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    await ensureServerRunning();
+    return runTextWithTimeout([
+      '-s',
+      deviceId,
+      'shell',
+      ...arguments,
+    ], timeout: timeout);
   }
 }

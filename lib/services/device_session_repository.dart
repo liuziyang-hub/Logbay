@@ -11,6 +11,7 @@ import '../features/device_home/data/installed_app_info.dart';
 import '../features/device_info/data/device_details.dart';
 import '../features/logs/data/models/log_entry.dart';
 import '../features/performance/services/device_performance_backend.dart';
+import '../features/performance/android/android_performance_backend.dart';
 import '../features/terminal/data/terminal_line.dart';
 import '../features/terminal/data/terminal_process.dart';
 import '../features/terminal/data/terminal_tools.dart';
@@ -306,7 +307,15 @@ class DeviceSessionRepository {
   }
 
   DevicePerformanceBackend createPerformanceBackend() {
-    return const UnavailableDevicePerformanceBackend('当前平台的性能采集后端尚未初始化。');
+    return switch (device) {
+      AndroidDevice() => AndroidPerformanceBackend(
+        adbTool: _adbTool,
+        deviceId: _deviceId,
+      ),
+      IosDevice() => const UnavailableDevicePerformanceBackend(
+        '当前 iOS 性能采集运行时尚未初始化。',
+      ),
+    };
   }
 
   /// Starts interactive `adb shell` (Android only). Caller owns the [Process].
