@@ -30,4 +30,4 @@
 - [x] 更新补丁版本号和 CHANGELOG。
 - [x] 构建 Windows Release 与 Inno 覆盖安装包。
 - [x] 覆盖安装并核对唯一安装项、文件版本与运行状态。
-- [ ] 提交、推送并发布 GitHub Release。
+- [x] 提交、推送并发布 GitHub Release。
