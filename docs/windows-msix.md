@@ -16,10 +16,10 @@ Windows packaging metadata lives in:
 
 The current MSIX identity is:
 
-- `display_name`: `Eagly`
-- `publisher_display_name`: `Gyanoba`
-- `identity_name`: `com.gyanoba.eagly`
-- `publisher`: `CN=Gyanoba`
+- `display_name`: `Logbay`
+- `publisher_display_name`: `Logbay`
+- `identity_name`: `com.gyanoba.logbay`
+- `publisher`: `CN=Logbay`
 
 ## Default behavior in this repository
 
@@ -46,7 +46,7 @@ Run the packaging step on **Windows**.
 dart pub global activate fastforge
 flutter pub get
 
-fastforge package --platform=windows --targets=exe,msix --artifact-name='eagly-{{build_name}}-{{platform}}{{#is_installer}}-setup{{/is_installer}}{{#ext}}.{{ext}}{{/ext}}'
+fastforge package --platform=windows --targets=exe,msix --artifact-name='Logbay-{{build_name}}-{{platform}}{{#is_installer}}-setup{{/is_installer}}{{#ext}}.{{ext}}{{/ext}}'
 ```
 
 Artifacts are written to:
@@ -79,5 +79,4 @@ Recommended:
 - If signing is enabled, confirm the certificate subject matches `publisher` exactly.
 - Install both the generated `.exe` and `.msix` on a clean Windows machine or VM.
 - Verify the app launches and bundled tools still work from the packaged install.
-
 
