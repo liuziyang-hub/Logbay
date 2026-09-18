@@ -6,6 +6,7 @@ class _Runner implements IosMetricsCommandRunner {
   int systemCall = 0;
   @override
   Future<String> run(List<String> arguments, {required String udid}) async {
+    if (arguments.contains('process-id-for-bundle-id')) return '2468\n';
     if (arguments.contains('system')) {
       systemCall++;
       return '{"netBytesIn":${1000 + systemCall * 100},"netBytesOut":${2000 + systemCall * 50}}';
@@ -31,5 +32,21 @@ void main() {
     expect(samples.first.networkRxBytes, isNull);
     expect(samples.last.networkRxBytes, 100);
     expect(samples.last.networkTxBytes, 50);
+  });
+
+  test('resolves bundle identifiers with the upstream DVT command', () async {
+    final backend = IosPerformanceBackend(deviceId: 'ios-1', runner: _Runner());
+
+    final sample = await backend
+        .start(
+          const PerformanceCollectionRequest(
+            applicationId: 'com.example.demo',
+            sampleInterval: Duration(milliseconds: 1),
+          ),
+        )
+        .first;
+    await backend.stop();
+
+    expect(sample.cpuPercent, 7.5);
   });
 }

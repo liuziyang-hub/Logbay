@@ -64,16 +64,14 @@ class IosPerformanceBackend extends DevicePerformanceBackend {
     IosSystemMetrics? system;
     final reasons = <PerformanceMetric, String>{};
     try {
+      final filter = await _resolveProcessFilter(processName);
       final output = await _runner.run([
         'developer',
         'dvt',
         'sysmon',
         'process',
         'single',
-        if (processName != null && processName.trim().isNotEmpty) ...[
-          '--filter',
-          'name=${processName.trim()}',
-        ],
+        if (filter != null) ...['--filter', filter],
         '--key',
         'name',
         '--key',
@@ -81,10 +79,7 @@ class IosPerformanceBackend extends DevicePerformanceBackend {
         '--key',
         'physFootprint',
       ], udid: deviceId);
-      process = IosMetricParsers.process(
-        output,
-        processName: processName?.trim(),
-      );
+      process = IosMetricParsers.process(output);
     } catch (error) {
       reasons[PerformanceMetric.cpu] = 'iOS 进程指标不可用：$error';
       reasons[PerformanceMetric.memory] = 'iOS 进程指标不可用：$error';
@@ -147,6 +142,21 @@ class IosPerformanceBackend extends DevicePerformanceBackend {
       },
       unavailableReasons: reasons,
     );
+  }
+
+  Future<String?> _resolveProcessFilter(String? target) async {
+    final value = target?.trim();
+    if (value == null || value.isEmpty) return null;
+    if (!value.contains('.')) return 'name=$value';
+    final output = await _runner.run([
+      'developer',
+      'dvt',
+      'process-id-for-bundle-id',
+      value,
+    ], udid: deviceId);
+    final pid = RegExp(r'\b\d+\b').firstMatch(output)?.group(0);
+    if (pid == null) throw StateError('目标应用尚未运行：$value');
+    return 'pid=$pid';
   }
 
   @override
