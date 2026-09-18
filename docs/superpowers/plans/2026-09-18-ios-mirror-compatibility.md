@@ -37,4 +37,4 @@
 - [x] 更新版本号与 CHANGELOG。
 - [x] 构建 Windows Release 与 Inno 覆盖安装包，计算 SHA-256。
 - [x] 覆盖安装并核对唯一安装项、文件版本、运行状态。
-- [ ] 提交并推送 GitHub，创建新版本 Release。
+- [x] 提交并推送 GitHub，创建新版本 Release。
