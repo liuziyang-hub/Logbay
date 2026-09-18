@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "name": "pymobiledevice3",
+      "version": "11.15.4",
+      "file": "pymobiledevice3-11.15.4-py3-none-any.whl",
+      "sha256": "65c2eae51ba5b24c6ab98cb32d30d01818a1570a33b48d4dad29ee95c508b343",
+      "source": "https://github.com/doronz88/pymobiledevice3"
+    },
+    {
+      "name": "perfetto-trace-processor",
+      "version": "55.3",
+      "file": "windows-amd64.zip",
+      "sha256": "e14f9fad47020670642e543bc2e58d9aedad8592322dda94ed1cda52f5954ea9",
+      "source": "https://github.com/google/perfetto"
+    }
+  ]
+}

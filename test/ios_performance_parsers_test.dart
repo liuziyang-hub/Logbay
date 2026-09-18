@@ -22,7 +22,7 @@ void main() {
       39.8,
     );
     final system = IosMetricParsers.system(
-      "{'netBytesIn': 5117, 'netBytesOut': 3543}",
+      'netBytesIn: 5117\nnetBytesOut: 3543',
     );
     expect(system?.networkRxBytes, 5117);
     expect(system?.networkTxBytes, 3543);
@@ -30,6 +30,7 @@ void main() {
 
   test('parses graphics output but never invents missing metrics', () {
     expect(IosMetricParsers.fps('{"fps":59.94}'), 59.94);
+    expect(IosMetricParsers.fps('{"CoreAnimationFramesPerSecond":58}'), 58);
     expect(IosMetricParsers.fps('garbled output'), isNull);
     expect(IosMetricParsers.process('[{"cpuUsage":1.0}]'), isNull);
     expect(IosMetricParsers.system('{}'), isNull);

@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import '../../features/app_log/app_logger.dart';
 import 'ios_developer_image_tool.dart';
 import 'ios_mirror_diagnostics.dart';
+import 'ios_runtime_broker.dart';
 import 'ios_wireless_tool.dart';
 import 'pymobiledevice3_launcher.dart';
 
@@ -17,7 +18,7 @@ import 'pymobiledevice3_launcher.dart';
 class IosMirrorSession {
   IosMirrorSession({
     required this.viewerUrl,
-    Process? process,
+    IosRuntimeChildProcess? process,
     Future<int>? exitCode,
     Future<bool> Function()? healthCheck,
   }) : _process = process,
@@ -25,7 +26,7 @@ class IosMirrorSession {
        _healthCheck = healthCheck;
 
   final String viewerUrl;
-  final Process? _process;
+  final IosRuntimeChildProcess? _process;
   final Future<int>? _externalExitCode;
   final Future<bool> Function()? _healthCheck;
   final Completer<int> _fakeExit = Completer<int>();
@@ -78,13 +79,16 @@ class IosMirrorTool {
     AppLogger? logger,
     IosDeveloperImageTool? imageTool,
     IosWirelessTool? wirelessTool,
+    IosRuntimeBroker? runtimeBroker,
   }) : _logger = logger ?? AppLogger(source: 'IosMirrorTool'),
        _imageTool = imageTool ?? IosDeveloperImageTool(),
-       _wirelessTool = wirelessTool ?? IosWirelessTool();
+       _wirelessTool = wirelessTool ?? IosWirelessTool(),
+       _runtimeBroker = runtimeBroker ?? IosRuntimeBroker.instance;
 
   final AppLogger _logger;
   final IosDeveloperImageTool _imageTool;
   final IosWirelessTool _wirelessTool;
+  final IosRuntimeBroker _runtimeBroker;
 
   static const minimumRecommendedVersion = Pymobiledevice3Version(11, 13, 1);
 
@@ -112,7 +116,7 @@ class IosMirrorTool {
     }
 
     await _checkCompatibility(command: command, udid: udid);
-    await _checkServeWebCapability(command);
+    await _checkServeWebCapability(udid);
 
     try {
       await _imageTool.ensureMounted(udid: udid, onProgress: onProgress);
@@ -124,7 +128,7 @@ class IosMirrorTool {
     final port = httpPort ?? await _allocatePort();
     // serve-web does not accept --udid / --userspace/--tunnel together.
     // Current pmd3 default is the no-root userspace tunnel; target via env.
-    final args = command.args([
+    final args = [
       'developer',
       'core-device',
       'display',
@@ -134,15 +138,10 @@ class IosMirrorTool {
       '--http-port',
       '$port',
       if (noAudio) '--no-audio',
-    ]);
+    ];
 
     _logger.info('Starting iOS mirror serve-web on 127.0.0.1:$port');
-    final process = await Process.start(
-      command.executable,
-      args,
-      runInShell: Platform.isWindows,
-      environment: {...Platform.environment, 'PYMOBILEDEVICE3_UDID': udid},
-    );
+    final process = await _runtimeBroker.start(udid, args);
 
     final viewerUrl = 'http://127.0.0.1:$port/';
     final ready = Completer<void>();
@@ -251,19 +250,15 @@ class IosMirrorTool {
     if (issue != null) throw UnsupportedError(issue);
   }
 
-  Future<void> _checkServeWebCapability(Pymobiledevice3Command command) async {
+  Future<void> _checkServeWebCapability(String udid) async {
     try {
-      final result = await Process.run(
-        command.executable,
-        command.args([
-          'developer',
-          'core-device',
-          'display',
-          'serve-web',
-          '--help',
-        ]),
-        runInShell: Platform.isWindows,
-      ).timeout(const Duration(seconds: 12));
+      final result = await _runtimeBroker.run(udid, [
+        'developer',
+        'core-device',
+        'display',
+        'serve-web',
+        '--help',
+      ], timeout: const Duration(seconds: 12));
       final output = '${result.stdout}\n${result.stderr}'.toLowerCase();
       if (result.exitCode != 0 ||
           (!output.contains('serve-web') && !output.contains('http-port'))) {

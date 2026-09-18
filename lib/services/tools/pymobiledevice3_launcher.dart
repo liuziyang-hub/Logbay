@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../../utils/tools_path.dart';
+
 @immutable
 class Pymobiledevice3Version implements Comparable<Pymobiledevice3Version> {
   const Pymobiledevice3Version(this.major, this.minor, this.patch);
@@ -44,9 +46,12 @@ class Pymobiledevice3Command {
   List<String> args(List<String> command) => [...prefixArgs, ...command];
 }
 
-/// Shared launcher for host-installed pymobiledevice3 (not bundled).
+/// Resolves the bundled pymobiledevice3 runtime first, with host installations
+/// retained as a development fallback.
 class Pymobiledevice3Launcher {
   Pymobiledevice3Launcher._();
+
+  static const managedVersion = '11.15.4';
 
   static Future<Pymobiledevice3Command?>? _resolved;
 
@@ -85,7 +90,7 @@ class Pymobiledevice3Launcher {
         final result = await Process.run(candidate.executable, [
           ...candidate.prefixArgs,
           '--help',
-        ], runInShell: Platform.isWindows);
+        ], runInShell: Platform.isWindows).timeout(const Duration(seconds: 90));
         final out = '${result.stdout}\n${result.stderr}'.toLowerCase();
         if (result.exitCode == 0 ||
             out.contains('syslog') ||
@@ -103,12 +108,28 @@ class Pymobiledevice3Launcher {
   static List<Pymobiledevice3Command> _candidates() {
     if (Platform.isWindows) {
       final appData = Platform.environment['APPDATA'];
+      final localAppData = Platform.environment['LOCALAPPDATA'];
       return [
+        if (_bundledWindowsCommand() case final bundled?) bundled,
         if (appData != null)
           Pymobiledevice3Command(
             '$appData\\uv\\tools\\pymobiledevice3\\Scripts\\pymobiledevice3.exe',
             const [],
           ),
+        if (localAppData != null &&
+            File('$localAppData\\Programs\\uv\\uv.exe').existsSync())
+          Pymobiledevice3Command('$localAppData\\Programs\\uv\\uv.exe', const [
+            'tool',
+            'run',
+            '--from',
+            'pymobiledevice3==$managedVersion',
+            'pymobiledevice3',
+          ]),
+        const Pymobiledevice3Command('uvx', [
+          '--from',
+          'pymobiledevice3==$managedVersion',
+          'pymobiledevice3',
+        ]),
         const Pymobiledevice3Command('pymobiledevice3', []),
         const Pymobiledevice3Command('py', ['-3', '-m', 'pymobiledevice3']),
         const Pymobiledevice3Command('python', ['-m', 'pymobiledevice3']),
@@ -120,5 +141,30 @@ class Pymobiledevice3Launcher {
       Pymobiledevice3Command('python3', ['-m', 'pymobiledevice3']),
       Pymobiledevice3Command('python', ['-m', 'pymobiledevice3']),
     ];
+  }
+
+  static Pymobiledevice3Command? _bundledWindowsCommand() {
+    final directory = resolveBundledToolsDirectory();
+    if (directory == null) return null;
+    return bundledWindowsCommandIn(directory);
+  }
+
+  @visibleForTesting
+  static Pymobiledevice3Command? bundledWindowsCommandIn(Directory directory) {
+    final executable = File(
+      '${directory.path}\\ios-runtime\\pymobiledevice3.exe',
+    );
+    if (executable.existsSync()) {
+      return Pymobiledevice3Command(executable.path, const []);
+    }
+    final uv = File('${directory.path}\\ios-runtime\\uv.exe');
+    if (!uv.existsSync()) return null;
+    return Pymobiledevice3Command(uv.path, const [
+      'tool',
+      'run',
+      '--from',
+      'pymobiledevice3==$managedVersion',
+      'pymobiledevice3',
+    ]);
   }
 }

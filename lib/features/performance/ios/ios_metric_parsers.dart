@@ -50,8 +50,9 @@ abstract final class IosMetricParsers {
 
   static IosSystemMetrics? system(String line) {
     final decoded = _decode(line);
-    if (decoded is! Map) return null;
-    final map = decoded.map((key, value) => MapEntry('$key', value));
+    final map = decoded is Map
+        ? decoded.map((key, value) => MapEntry('$key', value))
+        : _keyValueLines(line);
     final rx = _integer(map['netBytesIn']);
     final tx = _integer(map['netBytesOut']);
     if (rx == null || tx == null) return null;
@@ -70,7 +71,24 @@ abstract final class IosMetricParsers {
     final decoded = _decode(line);
     if (decoded is num) return decoded.toDouble();
     if (decoded is! Map) return null;
-    return _number(decoded['fps'] ?? decoded['FPS'] ?? decoded['frameRate']);
+    return _number(
+      decoded['fps'] ??
+          decoded['FPS'] ??
+          decoded['frameRate'] ??
+          decoded['CoreAnimationFramesPerSecond'],
+    );
+  }
+
+  static Map<String, Object?> _keyValueLines(String source) {
+    final result = <String, Object?>{};
+    for (final line in const LineSplitter().convert(source)) {
+      final separator = line.indexOf(':');
+      if (separator <= 0) continue;
+      final key = line.substring(0, separator).trim();
+      final value = line.substring(separator + 1).trim();
+      result[key] = num.tryParse(value) ?? value;
+    }
+    return result;
   }
 
   static Object? _decode(String line) {

@@ -1,6 +1,5 @@
 import 'dart:async';
-import 'dart:io';
-
+import '../../../services/tools/ios_runtime_broker.dart';
 import '../../../services/tools/pymobiledevice3_launcher.dart';
 import '../data/performance_metric.dart';
 import '../data/performance_sample.dart';
@@ -9,25 +8,29 @@ import 'ios_metric_parsers.dart';
 
 abstract class IosMetricsCommandRunner {
   Future<String> run(List<String> arguments, {required String udid});
+
+  Future<String> runFirstLine(List<String> arguments, {required String udid});
 }
 
 class Pymobiledevice3MetricsCommandRunner implements IosMetricsCommandRunner {
+  Pymobiledevice3MetricsCommandRunner({IosRuntimeBroker? broker})
+    : _broker = broker ?? IosRuntimeBroker.instance;
+
+  final IosRuntimeBroker _broker;
+
   @override
   Future<String> run(List<String> arguments, {required String udid}) async {
-    final command = await Pymobiledevice3Launcher.resolve();
-    if (command == null) throw StateError('未找到 iOS 性能采集运行时。');
-    final result = await Process.run(
-      command.executable,
-      command.args(arguments),
-      runInShell: Platform.isWindows,
-      environment: {...Platform.environment, 'PYMOBILEDEVICE3_UDID': udid},
-    ).timeout(const Duration(seconds: 15));
+    final result = await _broker.run(udid, arguments);
     if (result.exitCode != 0) {
-      final detail = '${result.stderr}'.trim();
+      final detail = result.stderr.trim();
       throw StateError(detail.isEmpty ? 'iOS 性能采集命令执行失败。' : detail);
     }
-    return '${result.stdout}';
+    return result.stdout;
   }
+
+  @override
+  Future<String> runFirstLine(List<String> arguments, {required String udid}) =>
+      _broker.readFirstLine(udid, arguments);
 }
 
 class IosPerformanceBackend extends DevicePerformanceBackend {
@@ -62,42 +65,74 @@ class IosPerformanceBackend extends DevicePerformanceBackend {
   ) async {
     IosProcessMetrics? process;
     IosSystemMetrics? system;
+    double? fps;
+    double? temperature;
     final reasons = <PerformanceMetric, String>{};
-    try {
-      final filter = await _resolveProcessFilter(processName);
-      final output = await _runner.run([
-        'developer',
-        'dvt',
-        'sysmon',
-        'process',
-        'single',
-        if (filter != null) ...['--filter', filter],
-        '--key',
-        'name',
-        '--key',
-        'cpuUsage',
-        '--key',
-        'physFootprint',
-      ], udid: deviceId);
-      process = IosMetricParsers.process(output);
-    } catch (error) {
-      reasons[PerformanceMetric.cpu] = 'iOS 进程指标不可用：$error';
-      reasons[PerformanceMetric.memory] = 'iOS 进程指标不可用：$error';
-    }
-    try {
-      final output = await _runner.run([
-        'developer',
-        'dvt',
-        'sysmon',
-        'system',
-        '--fields',
-        'netBytesIn,netBytesOut',
-      ], udid: deviceId);
-      system = IosMetricParsers.system(output);
-    } catch (error) {
-      reasons[PerformanceMetric.networkReceive] = 'iOS 网络指标不可用：$error';
-      reasons[PerformanceMetric.networkTransmit] = 'iOS 网络指标不可用：$error';
-    }
+    await Future.wait([
+      () async {
+        try {
+          final filter = await _resolveProcessFilter(processName);
+          final output = await _runner.run([
+            'developer',
+            'dvt',
+            'sysmon',
+            'process',
+            'single',
+            if (filter != null) ...['--filter', filter],
+            '--key',
+            'name',
+            '--key',
+            'cpuUsage',
+            '--key',
+            'physFootprint',
+          ], udid: deviceId);
+          process = IosMetricParsers.process(output);
+        } catch (error) {
+          reasons[PerformanceMetric.cpu] = 'iOS 进程指标不可用：$error';
+          reasons[PerformanceMetric.memory] = 'iOS 进程指标不可用：$error';
+        }
+      }(),
+      () async {
+        try {
+          final output = await _runner.run([
+            'developer',
+            'dvt',
+            'sysmon',
+            'system',
+            '--fields',
+            'netBytesIn,netBytesOut',
+          ], udid: deviceId);
+          system = IosMetricParsers.system(output);
+        } catch (error) {
+          reasons[PerformanceMetric.networkReceive] = 'iOS 网络指标不可用：$error';
+          reasons[PerformanceMetric.networkTransmit] = 'iOS 网络指标不可用：$error';
+        }
+      }(),
+      () async {
+        try {
+          final output = await _runner.runFirstLine([
+            'developer',
+            'dvt',
+            'graphics',
+          ], udid: deviceId);
+          fps = IosMetricParsers.fps(output);
+        } catch (error) {
+          reasons[PerformanceMetric.fps] = 'iOS 帧率指标不可用：$error';
+        }
+      }(),
+      () async {
+        try {
+          final output = await _runner.runFirstLine([
+            'diagnostics',
+            'battery',
+            'monitor',
+          ], udid: deviceId);
+          temperature = IosMetricParsers.temperatureCelsius(output);
+        } catch (error) {
+          reasons[PerformanceMetric.temperature] = 'iOS 温度指标不可用：$error';
+        }
+      }(),
+    ]);
 
     if (process == null && system == null) {
       _emptyRounds++;
@@ -119,18 +154,31 @@ class IosPerformanceBackend extends DevicePerformanceBackend {
         : tx - _previousTx!;
     _previousRx = rx;
     _previousTx = tx;
-    reasons[PerformanceMetric.fps] = '当前设备未提供稳定的 Graphics 帧率流。';
-    reasons[PerformanceMetric.frameTime] = '当前设备未提供逐帧耗时。';
-    reasons[PerformanceMetric.temperature] = '温度需设备支持电池诊断通道。';
+    if (fps == null) {
+      reasons.putIfAbsent(PerformanceMetric.fps, () => '设备未返回 Graphics 帧率数据。');
+    }
+    if (fps == null) {
+      reasons[PerformanceMetric.frameTime] = '当前设备未提供逐帧耗时。';
+    }
+    if (temperature == null) {
+      reasons.putIfAbsent(PerformanceMetric.temperature, () => '设备未返回电池温度数据。');
+    }
 
     return PerformanceSample(
       timestamp: DateTime.now(),
       elapsed: elapsed,
+      fps: fps,
+      frameTimeMs: fps == null || fps! <= 0 ? null : 1000 / fps!,
       cpuPercent: process?.cpuPercent,
       memoryBytes: process?.memoryBytes,
       networkRxBytes: rxDelta == null ? null : (rxDelta < 0 ? 0 : rxDelta),
       networkTxBytes: txDelta == null ? null : (txDelta < 0 ? 0 : txDelta),
+      temperatureCelsius: temperature,
       sourceQuality: {
+        if (fps != null)
+          PerformanceMetric.fps: PerformanceSourceQuality.precise,
+        if (fps != null)
+          PerformanceMetric.frameTime: PerformanceSourceQuality.estimated,
         if (process != null)
           PerformanceMetric.cpu: PerformanceSourceQuality.precise,
         if (process != null)
@@ -139,6 +187,8 @@ class IosPerformanceBackend extends DevicePerformanceBackend {
           PerformanceMetric.networkReceive: PerformanceSourceQuality.estimated,
         if (txDelta != null)
           PerformanceMetric.networkTransmit: PerformanceSourceQuality.estimated,
+        if (temperature != null)
+          PerformanceMetric.temperature: PerformanceSourceQuality.precise,
       },
       unavailableReasons: reasons,
     );

@@ -9,9 +9,21 @@ class _Runner implements IosMetricsCommandRunner {
     if (arguments.contains('process-id-for-bundle-id')) return '2468\n';
     if (arguments.contains('system')) {
       systemCall++;
-      return '{"netBytesIn":${1000 + systemCall * 100},"netBytesOut":${2000 + systemCall * 50}}';
+      return 'netBytesIn: ${1000 + systemCall * 100}\n'
+          'netBytesOut: ${2000 + systemCall * 50}';
     }
     return '[{"name":"Demo","cpuUsage":7.5,"physFootprint":4096}]';
+  }
+
+  @override
+  Future<String> runFirstLine(
+    List<String> arguments, {
+    required String udid,
+  }) async {
+    if (arguments.contains('graphics')) {
+      return '{"CoreAnimationFramesPerSecond":60}';
+    }
+    return '{"Temperature":3980}';
   }
 }
 
@@ -29,6 +41,8 @@ void main() {
 
     expect(samples.first.cpuPercent, 7.5);
     expect(samples.first.memoryBytes, 4096);
+    expect(samples.first.fps, 60);
+    expect(samples.first.temperatureCelsius, 39.8);
     expect(samples.first.networkRxBytes, isNull);
     expect(samples.last.networkRxBytes, 100);
     expect(samples.last.networkTxBytes, 50);
