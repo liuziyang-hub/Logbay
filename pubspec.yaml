@@ -36,6 +36,7 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   collection: ^1.19.1
+  characters: ^1.4.0
   data_table_2: ^2.7.2
   file_picker: ^8.0.0
   google_fonts: ^8.0.2

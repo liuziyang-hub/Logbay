@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:gap/gap.dart';
 
 import '../../../data/device.dart';
-import '../../../presentation/theme/app_theme.dart';
 import '../data/device_info.dart';
 import '../data/installed_app_info.dart';
 import 'home_primitives.dart';
