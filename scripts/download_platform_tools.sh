@@ -19,6 +19,7 @@ SCRCPY_MACOS_ARCH="${SCRCPY_MACOS_ARCH:-$(uname -m | sed 's/arm64/aarch64/')}"
 SCRCPY_LINUX_URL="https://github.com/Genymobile/scrcpy/releases/download/v${SCRCPY_VERSION}/scrcpy-linux-x86_64-v${SCRCPY_VERSION}.tar.gz"
 SCRCPY_MACOS_URL="https://github.com/Genymobile/scrcpy/releases/download/v${SCRCPY_VERSION}/scrcpy-macos-${SCRCPY_MACOS_ARCH}-v${SCRCPY_VERSION}.tar.gz"
 SCRCPY_WINDOWS_URL="https://github.com/Genymobile/scrcpy/releases/download/v${SCRCPY_VERSION}/scrcpy-win64-v${SCRCPY_VERSION}.zip"
+PERFETTO_VERSION="v55.3"
 # The bundled libimobiledevice (imobiledevice-net runtimes/ubuntu.16.04-x64) is
 # linked against OpenSSL 1.0 (libssl.so.1.0.0 / libcrypto.so.1.0.0), a soname no
 # modern distro ships. We stage the matching libs from Ubuntu 16.04's official
@@ -93,6 +94,60 @@ download_adb() {
     unzip -o -j "$zip_file" "platform-tools/adb" -d "$target_dir"
     chmod +x "$target_dir/adb"
   fi
+}
+
+download_perfetto_trace_processor() {
+  local platform="$1"
+  local target_dir="$2"
+  local arch url sha file_name archive extracted binary
+  case "$platform:$(uname -m)" in
+    windows:*)
+      arch="windows-amd64"
+      file_name="trace_processor_shell.exe"
+      sha="e14f9fad47020670642e543bc2e58d9aedad8592322dda94ed1cda52f5954ea9"
+      ;;
+    linux:aarch64|linux:arm64)
+      arch="linux-arm64"
+      file_name="trace_processor_shell"
+      sha="a3d9bfd63eec0f6ccbad2d2d43c180473b7197fa7e2bb76155920f3345954b07"
+      ;;
+    linux:*)
+      arch="linux-amd64"
+      file_name="trace_processor_shell"
+      sha="9ebadc49060ed7f5c678c49d8e44775176b5493201185dca18adfb490430ec20"
+      ;;
+    macos:arm64|macos:aarch64)
+      arch="mac-arm64"
+      file_name="trace_processor_shell"
+      sha="ada91609fdebed4bcfaab645d8203bcd2e143c717ef07c421769d4fe17df93ac"
+      ;;
+    macos:*)
+      arch="mac-amd64"
+      file_name="trace_processor_shell"
+      sha="a7a05e5a7fa1f868068c631c6f14a1fc419d010eb70479ba8aca1754cc5e011d"
+      ;;
+  esac
+  url="https://github.com/google/perfetto/releases/download/$PERFETTO_VERSION/$arch.zip"
+  archive="$TMP_DIR/perfetto-$arch.zip"
+  extracted="$TMP_DIR/perfetto-$arch"
+  echo "Downloading Perfetto $PERFETTO_VERSION for $arch..."
+  curl -L --fail -o "$archive" "$url"
+  if command -v sha256sum >/dev/null 2>&1; then
+    echo "$sha  $archive" | sha256sum -c -
+  else
+    [ "$(shasum -a 256 "$archive" | awk '{print $1}')" = "$sha" ] || {
+      echo "Perfetto SHA-256 mismatch" >&2
+      exit 1
+    }
+  fi
+  mkdir -p "$extracted"
+  unzip -o "$archive" -d "$extracted" >/dev/null
+  binary="$(find "$extracted" -type f -name "$file_name" | head -1)"
+  [ -n "$binary" ] || { echo "$file_name missing from Perfetto archive" >&2; exit 1; }
+  cp -f "$binary" "$target_dir/$file_name"
+  [ "$platform" = "windows" ] || chmod +x "$target_dir/$file_name"
+  printf '{\n  "name": "trace_processor_shell",\n  "version": "%s",\n  "platform": "%s",\n  "file": "%s",\n  "archiveSha256": "%s"\n}\n' \
+    "$PERFETTO_VERSION" "$arch" "$file_name" "$sha" > "$target_dir/perfetto-runtime.json"
 }
 
 copy_directory_contents_flat() {
@@ -643,6 +698,7 @@ prepare_platform_bundle() {
     stage_optional_bundle "$(platform_bundle_spec "$platform")" "$target_dir" "$platform"
   fi
   stage_scrcpy_bundle "$(scrcpy_bundle_spec "$platform")" "$target_dir" "$platform"
+  download_perfetto_trace_processor "$platform" "$target_dir"
   if [ "$platform" = "windows" ]; then
     # Build-time FFmpeg headers + import libs for the native scrcpy decoder.
     # Writes .ffmpeg-dev/.env (consumed by scripts/setup.sh) and forwards
