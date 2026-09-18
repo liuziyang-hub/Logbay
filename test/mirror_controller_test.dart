@@ -19,6 +19,16 @@ void main() {
     await PreferencesService.init();
   });
 
+  setUp(() {
+    MirrorController.iosRestartBackoff = const [
+      Duration.zero,
+      Duration.zero,
+      Duration.zero,
+      Duration.zero,
+    ];
+    MirrorController.iosHealthInterval = const Duration(hours: 1);
+  });
+
   MirrorController createMirror({Device? withDevice}) {
     device =
         withDevice ??
@@ -37,6 +47,16 @@ void main() {
   tearDown(() {
     session?.dispose();
     session = null;
+  });
+
+  tearDownAll(() {
+    MirrorController.iosRestartBackoff = const [
+      Duration(seconds: 1),
+      Duration(seconds: 2),
+      Duration(seconds: 4),
+      Duration(seconds: 8),
+    ];
+    MirrorController.iosHealthInterval = const Duration(seconds: 2);
   });
 
   test('mirror starts for a connected Android device', () async {
@@ -61,6 +81,22 @@ void main() {
     expect(service.startedIosMirrorCount, 1);
     expect(service.startedMirrorCount, 0);
   });
+
+  test(
+    'unexpected iOS mirror exit triggers a bounded automatic restart',
+    () async {
+      final mirror = createMirror(
+        withDevice: Device.ios('00008110-001234567890801E', 'device'),
+      );
+      await mirror.start();
+
+      service.iosMirrorExit!.complete(1);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      expect(service.startedIosMirrorCount, 2);
+      expect(mirror.screenMirrorState, ScreenMirrorState.running);
+    },
+  );
 
   test('mirror stops when the device disconnects', () async {
     final mirror = createMirror();

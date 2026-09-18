@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 
 import '../../data/device.dart';
@@ -71,6 +72,8 @@ class MirrorController extends FeatureController {
   ScreenRecordingSession? _recordingSession;
   bool _disposed = false;
   int _startGeneration = 0;
+  int _iosRestartCount = 0;
+  DateTime? _iosRestartWindowStartedAt;
 
   /// Whether device→desktop clipboard changes are mirrored automatically.
   bool clipboardSyncEnabled = true;
@@ -90,6 +93,23 @@ class MirrorController extends FeatureController {
   DateTime? _sessionStartedAt;
   static const int _maxAutoRestarts = 6;
   static const Duration _restartCooldown = Duration(seconds: 4);
+
+  @visibleForTesting
+  static List<Duration> iosRestartBackoff = const [
+    Duration(seconds: 1),
+    Duration(seconds: 2),
+    Duration(seconds: 4),
+    Duration(seconds: 8),
+  ];
+
+  @visibleForTesting
+  static Duration iosRestartWindow = const Duration(minutes: 10);
+
+  @visibleForTesting
+  static Duration iosStableReset = const Duration(seconds: 60);
+
+  @visibleForTesting
+  static Duration iosHealthInterval = const Duration(seconds: 2);
 
   ScrcpyMirrorSession? get screenMirrorSession => _session;
 
@@ -262,6 +282,7 @@ class MirrorController extends FeatureController {
       }
 
       unawaited(_watchIosExit(mirror, generation));
+      unawaited(_watchIosHealth(mirror, generation));
     } on IosMirrorException catch (error) {
       if (generation != _startGeneration || _disposed) return;
       iosPrepareHint = null;
@@ -304,13 +325,72 @@ class MirrorController extends FeatureController {
     final code = await mirror.exitCode;
     if (_disposed || generation != _startGeneration) return;
     if (!identical(_iosSession, mirror)) return;
-    _iosSession = null;
-    if (screenMirrorState == ScreenMirrorState.running ||
-        screenMirrorState == ScreenMirrorState.starting) {
-      screenMirrorState = ScreenMirrorState.error;
-      screenMirrorError = 'iOS 镜像进程已退出（退出码 $code）。';
-      _notify();
+    await _recoverIosMirror(mirror, generation, 'iOS 镜像进程已退出（退出码 $code）。');
+  }
+
+  Future<void> _watchIosHealth(IosMirrorSession mirror, int generation) async {
+    var consecutiveFailures = 0;
+    while (!_disposed &&
+        generation == _startGeneration &&
+        identical(_iosSession, mirror)) {
+      await Future<void>.delayed(iosHealthInterval);
+      if (_disposed ||
+          generation != _startGeneration ||
+          !identical(_iosSession, mirror)) {
+        return;
+      }
+      if (await mirror.isHealthy()) {
+        consecutiveFailures = 0;
+        continue;
+      }
+      consecutiveFailures++;
+      if (consecutiveFailures >= 2) {
+        await _recoverIosMirror(mirror, generation, 'iOS 镜像画面服务已失去响应。');
+        return;
+      }
     }
+  }
+
+  Future<void> _recoverIosMirror(
+    IosMirrorSession mirror,
+    int generation,
+    String reason,
+  ) async {
+    if (_disposed || generation != _startGeneration) return;
+    if (!identical(_iosSession, mirror)) return;
+    _iosSession = null;
+
+    final startedAt = _sessionStartedAt;
+    if (startedAt != null &&
+        DateTime.now().difference(startedAt) >= iosStableReset) {
+      _iosRestartCount = 0;
+      _iosRestartWindowStartedAt = null;
+    }
+    final now = DateTime.now();
+    final windowStarted = _iosRestartWindowStartedAt;
+    if (windowStarted == null ||
+        now.difference(windowStarted) > iosRestartWindow) {
+      _iosRestartWindowStartedAt = now;
+      _iosRestartCount = 0;
+    }
+    if (_iosRestartCount >= iosRestartBackoff.length) {
+      await mirror.stop();
+      screenMirrorState = ScreenMirrorState.error;
+      screenMirrorError = '$reason 已达到自动重连上限，请检查连接后手动重试。';
+      iosPrepareHint = null;
+      _notify();
+      return;
+    }
+
+    final delay = iosRestartBackoff[_iosRestartCount++];
+    screenMirrorState = ScreenMirrorState.starting;
+    screenMirrorError = null;
+    iosPrepareHint = '$reason ${delay.inSeconds} 秒后自动重连…';
+    _notify();
+    await mirror.stop();
+    await Future<void>.delayed(delay);
+    if (_disposed || generation != _startGeneration || !isConnected) return;
+    await _startIos();
   }
 
   Future<void> stop({bool notify = true}) async {

@@ -15,15 +15,42 @@ import 'pymobiledevice3_launcher.dart';
 ///
 /// Upstream: https://github.com/doronz88/pymobiledevice3
 class IosMirrorSession {
-  IosMirrorSession({required this.viewerUrl, Process? process})
-    : _process = process;
+  IosMirrorSession({
+    required this.viewerUrl,
+    Process? process,
+    Future<int>? exitCode,
+    Future<bool> Function()? healthCheck,
+  }) : _process = process,
+       _externalExitCode = exitCode,
+       _healthCheck = healthCheck;
 
   final String viewerUrl;
   final Process? _process;
+  final Future<int>? _externalExitCode;
+  final Future<bool> Function()? _healthCheck;
   final Completer<int> _fakeExit = Completer<int>();
   bool _stopped = false;
 
-  Future<int> get exitCode => _process?.exitCode ?? _fakeExit.future;
+  Future<int> get exitCode =>
+      _process?.exitCode ?? _externalExitCode ?? _fakeExit.future;
+
+  Future<bool> isHealthy() async {
+    final custom = _healthCheck;
+    if (custom != null) return custom();
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 2);
+    try {
+      final request = await client.getUrl(Uri.parse(viewerUrl));
+      final response = await request.close().timeout(
+        const Duration(seconds: 3),
+      );
+      await response.drain<void>();
+      return response.statusCode >= 200 && response.statusCode < 500;
+    } catch (_) {
+      return false;
+    } finally {
+      client.close(force: true);
+    }
+  }
 
   Future<void> stop() async {
     if (_stopped) return;

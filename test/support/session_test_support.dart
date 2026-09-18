@@ -75,6 +75,7 @@ class FakeSessionService extends DeviceSessionRepository {
   int startLogStreamCount = 0;
   int startedMirrorCount = 0;
   int startedIosMirrorCount = 0;
+  Completer<int>? iosMirrorExit;
   int stoppedMirrorCount = 0;
   int pingCount = 0;
   int recoverCount = 0;
@@ -163,7 +164,13 @@ class FakeSessionService extends DeviceSessionRepository {
     void Function(String message)? onProgress,
   }) async {
     startedIosMirrorCount++;
-    return IosMirrorSession(viewerUrl: 'http://127.0.0.1:9/');
+    final exit = Completer<int>();
+    iosMirrorExit = exit;
+    return IosMirrorSession(
+      viewerUrl: 'http://127.0.0.1:9/',
+      exitCode: exit.future,
+      healthCheck: () async => true,
+    );
   }
 
   // ── Apps feature ──────────────────────────────────────────────────────────
