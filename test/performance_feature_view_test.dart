@@ -63,6 +63,8 @@ void main() {
       expect(find.text('开始采集'), findsOneWidget);
       expect(find.textContaining('FPS'), findsWidgets);
       expect(find.textContaining('帧耗时'), findsOneWidget);
+      expect(find.textContaining('实时查看 FPS、帧耗时、CPU、内存、网络和温度。'), findsOneWidget);
+      expect(find.textContaining('不会用 0 代替'), findsOneWidget);
 
       await tester.enterText(find.byType(TextField), 'com.example.app');
       await tester.tap(find.text('开始采集'));

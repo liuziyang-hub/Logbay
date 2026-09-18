@@ -99,6 +99,33 @@ class PaneBody extends StatelessWidget {
             textAlign: TextAlign.center,
           ),
           if (controller.isIosMirror &&
+              controller.screenMirrorState == ScreenMirrorState.unsupported &&
+              controller.iosFallbackScreenshot != null) ...[
+            const Gap(14),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 260, maxHeight: 360),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Image.memory(
+                  controller.iosFallbackScreenshot!,
+                  fit: BoxFit.contain,
+                  gaplessPlayback: true,
+                  errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                ),
+              ),
+            ),
+          ],
+          if (controller.iosFallbackScreenshotError != null) ...[
+            const Gap(10),
+            Text(
+              controller.iosFallbackScreenshotError!,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.error,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+          if (controller.isIosMirror &&
               controller.screenMirrorState == ScreenMirrorState.stopped) ...[
             const Gap(12),
             SwitchListTile.adaptive(
@@ -110,18 +137,55 @@ class PaneBody extends StatelessWidget {
             ),
           ],
           const Gap(18),
-          FilledButton.icon(
-            onPressed: controller.isScreenMirrorRunning
-                ? () => controller.stop()
-                : controller.canStart
-                ? () => controller.start()
-                : null,
-            icon: Icon(
-              controller.isScreenMirrorRunning
-                  ? Icons.stop_circle_outlined
-                  : Icons.play_arrow,
-            ),
-            label: Text(controller.isScreenMirrorRunning ? '停止镜像' : '开始镜像'),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            alignment: WrapAlignment.center,
+            children: [
+              if (controller.isIosMirror &&
+                  controller.screenMirrorState == ScreenMirrorState.unsupported)
+                OutlinedButton.icon(
+                  onPressed: controller.isIosFallbackScreenshotLoading
+                      ? null
+                      : () => controller.captureIosFallbackScreenshot(),
+                  icon: controller.isIosFallbackScreenshotLoading
+                      ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.photo_camera_outlined),
+                  label: Text(
+                    controller.isIosFallbackScreenshotLoading
+                        ? '正在截取…'
+                        : '截取当前画面',
+                  ),
+                ),
+              FilledButton.icon(
+                onPressed: controller.isScreenMirrorRunning
+                    ? () => controller.stop()
+                    : controller.canStart
+                    ? () => controller.start()
+                    : null,
+                icon: Icon(
+                  controller.isScreenMirrorRunning
+                      ? Icons.stop_circle_outlined
+                      : controller.isIosMirror &&
+                            controller.screenMirrorState ==
+                                ScreenMirrorState.unsupported
+                      ? Icons.refresh_rounded
+                      : Icons.play_arrow,
+                ),
+                label: Text(
+                  controller.isScreenMirrorRunning
+                      ? '停止镜像'
+                      : controller.isIosMirror &&
+                            controller.screenMirrorState ==
+                                ScreenMirrorState.unsupported
+                      ? '重新检测'
+                      : '开始镜像',
+                ),
+              ),
+            ],
           ),
         ],
       ),

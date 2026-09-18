@@ -170,7 +170,7 @@ class IosMirrorTool {
         .listen((line) {
           stdoutBuf.writeln(line);
           considerLine(line);
-          _logger.info('[serve-web] $line');
+          _logger.info('[serve-web] ${IosMirrorDiagnostic.redactForLog(line)}');
         });
     process.stderr
         .transform(const Utf8Decoder(allowMalformed: true))
@@ -178,7 +178,9 @@ class IosMirrorTool {
         .listen((line) {
           stderrBuf.writeln(line);
           considerLine(line);
-          _logger.info('[serve-web:err] $line');
+          _logger.info(
+            '[serve-web:err] ${IosMirrorDiagnostic.redactForLog(line)}',
+          );
         });
 
     // Either the process prints readiness, or we give the HTTP server a
@@ -188,12 +190,13 @@ class IosMirrorTool {
         ready.future,
         Future<void>.delayed(const Duration(seconds: 4)),
         process.exitCode.then((code) {
-          throw IosMirrorException(
-            _friendlyExit(code, stderrBuf.toString(), stdoutBuf.toString()),
+          final raw = '${stderrBuf.toString()}\n${stdoutBuf.toString()}';
+          throw diagnosedFailure(
+            raw.trim().isEmpty ? 'iOS 镜像进程已退出（退出码 $code）。' : raw,
           );
         }),
       ]);
-    } on IosMirrorException {
+    } on Object {
       process.kill();
       rethrow;
     }
@@ -205,22 +208,15 @@ class IosMirrorTool {
     if (!await _portOpen(port)) {
       final detail = stderrBuf.toString().trim();
       process.kill();
-      throw IosMirrorException(
-        detail.isEmpty
-            ? 'iOS 镜像服务未能在端口 $port 启动。'
-                  '请确认 iOS 17.4+、开发者模式已开，并已执行 mounter auto-mount。'
-            : 'iOS 镜像启动失败：\n$detail',
+      throw diagnosedFailure(
+        detail.isEmpty ? 'iOS 镜像服务未能在端口 $port 启动。' : detail,
       );
     }
 
     final serverFailure = await _probeCodecFailure(port);
     if (serverFailure != null) {
       process.kill();
-      final message = friendlyServerFailure(serverFailure);
-      if (_requiresNewerIos(serverFailure)) {
-        throw UnsupportedError(message);
-      }
-      throw IosMirrorException(message);
+      throw diagnosedFailure(serverFailure);
     }
 
     return IosMirrorSession(viewerUrl: viewerUrl, process: process);
@@ -264,15 +260,18 @@ class IosMirrorTool {
     return null;
   }
 
-  static bool _requiresNewerIos(String raw) {
-    final lower = raw.toLowerCase();
-    return lower.contains('requires ios 27') ||
-        lower.contains('ios 27.0 or later');
-  }
-
   @visibleForTesting
   static String friendlyServerFailure(String raw) {
     return IosMirrorDiagnostic.classify(raw).userMessage;
+  }
+
+  @visibleForTesting
+  static Object diagnosedFailure(String raw) {
+    final diagnostic = IosMirrorDiagnostic.classify(raw);
+    if (diagnostic.kind == IosMirrorFailureKind.unsupportedSystem) {
+      return UnsupportedError(diagnostic.userMessage);
+    }
+    return IosMirrorException(diagnostic.userMessage, diagnostic: diagnostic);
   }
 
   static Future<void> openUrl(String url) async {
@@ -328,26 +327,6 @@ class IosMirrorTool {
     } finally {
       client.close(force: true);
     }
-  }
-
-  static String _friendlyExit(int code, String stderr, String stdout) {
-    final blob = '$stderr\n$stdout'.toLowerCase();
-    if (_requiresNewerIos(blob)) {
-      return friendlyServerFailure(blob);
-    }
-    if (blob.contains('developer') && blob.contains('disk')) {
-      return '需要先挂载 Developer Disk Image：\n'
-          'pymobiledevice3 mounter auto-mount';
-    }
-    if (blob.contains('tunnel') || blob.contains('userspace')) {
-      return '无法建立 iOS 17+ 隧道。请确认 USB 已信任，并重试。\n'
-          '原始输出：${stderr.trim().isEmpty ? stdout.trim() : stderr.trim()}';
-    }
-    if (blob.contains('no device') || blob.contains('not found')) {
-      return '未找到该 iOS 设备，请重新插拔并信任此电脑。';
-    }
-    final detail = stderr.trim().isNotEmpty ? stderr.trim() : stdout.trim();
-    return 'iOS 镜像进程退出（code $code）${detail.isEmpty ? '' : '：\n$detail'}';
   }
 }
 

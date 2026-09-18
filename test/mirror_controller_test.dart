@@ -138,4 +138,45 @@ void main() {
     expect(mirror.mirrorQuality, MirrorQuality.high);
     expect(service.startedMirrorCount, 2);
   });
+
+  test('captures a single iOS fallback frame', () async {
+    final mirror = createMirror(
+      withDevice: Device.ios('00008110-001234567890801E', 'device'),
+    );
+
+    await mirror.captureIosFallbackScreenshot();
+
+    expect(service.captureScreenshotCount, 1);
+    expect(mirror.iosFallbackScreenshot, service.screenshotToReturn);
+    expect(mirror.iosFallbackScreenshotError, isNull);
+    expect(mirror.isIosFallbackScreenshotLoading, isFalse);
+  });
+
+  test('iOS version restriction enters unsupported without retry', () async {
+    final mirror = createMirror(
+      withDevice: Device.ios('00008110-001234567890801E', 'device'),
+    );
+    service.iosMirrorStartError = UnsupportedError(
+      'Apple 的远程控制服务要求 iOS 27 或以上。',
+    );
+
+    await mirror.start();
+
+    expect(mirror.screenMirrorState, ScreenMirrorState.unsupported);
+    expect(mirror.screenMirrorError, contains('iOS 27'));
+    expect(service.startedIosMirrorCount, 1);
+  });
+
+  test('surfaces an iOS fallback screenshot failure in Chinese', () async {
+    final mirror = createMirror(
+      withDevice: Device.ios('00008110-001234567890801E', 'device'),
+    );
+    service.screenshotError = StateError('capture unavailable');
+
+    await mirror.captureIosFallbackScreenshot();
+
+    expect(mirror.iosFallbackScreenshot, isNull);
+    expect(mirror.iosFallbackScreenshotError, contains('截取当前画面失败'));
+    expect(mirror.isIosFallbackScreenshotLoading, isFalse);
+  });
 }

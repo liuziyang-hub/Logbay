@@ -76,7 +76,11 @@ class FakeSessionService extends DeviceSessionRepository {
   int startedMirrorCount = 0;
   int startedIosMirrorCount = 0;
   Completer<int>? iosMirrorExit;
+  Object? iosMirrorStartError;
   int stoppedMirrorCount = 0;
+  int captureScreenshotCount = 0;
+  Uint8List screenshotToReturn = Uint8List.fromList(const [1, 2, 3]);
+  Object? screenshotError;
   int pingCount = 0;
   int recoverCount = 0;
 
@@ -164,6 +168,8 @@ class FakeSessionService extends DeviceSessionRepository {
     void Function(String message)? onProgress,
   }) async {
     startedIosMirrorCount++;
+    final error = iosMirrorStartError;
+    if (error != null) throw error;
     final exit = Completer<int>();
     iosMirrorExit = exit;
     return IosMirrorSession(
@@ -171,6 +177,14 @@ class FakeSessionService extends DeviceSessionRepository {
       exitCode: exit.future,
       healthCheck: () async => true,
     );
+  }
+
+  @override
+  Future<Uint8List> captureScreenshot() async {
+    captureScreenshotCount++;
+    final error = screenshotError;
+    if (error != null) throw error;
+    return screenshotToReturn;
   }
 
   // ── Apps feature ──────────────────────────────────────────────────────────

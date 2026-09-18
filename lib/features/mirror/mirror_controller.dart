@@ -86,6 +86,12 @@ class MirrorController extends FeatureController {
   /// Live status while iOS DDI mount / serve-web is starting.
   String? iosPrepareHint;
 
+  /// Latest single-frame fallback for iOS versions that cannot start the
+  /// interactive CoreDevice stream.
+  Uint8List? iosFallbackScreenshot;
+  bool isIosFallbackScreenshotLoading = false;
+  String? iosFallbackScreenshotError;
+
   /// Number of consecutive automatic restarts (e.g. from rotation desyncs).
   /// Reset once a stream has survived longer than [_restartCooldown]; caps a
   /// restart storm from an app that bounces orientation before settling.
@@ -239,6 +245,8 @@ class MirrorController extends FeatureController {
     if (_disposed) return;
 
     final generation = ++_startGeneration;
+    iosFallbackScreenshot = null;
+    iosFallbackScreenshotError = null;
     screenMirrorState = ScreenMirrorState.starting;
     screenMirrorError = null;
     iosPrepareHint = '正在检查开发者镜像…';
@@ -423,6 +431,9 @@ class MirrorController extends FeatureController {
 
     screenMirrorState = ScreenMirrorState.stopped;
     screenMirrorError = null;
+    iosFallbackScreenshot = null;
+    iosFallbackScreenshotError = null;
+    isIosFallbackScreenshotLoading = false;
     if (notify) _notify();
   }
 
@@ -544,6 +555,26 @@ class MirrorController extends FeatureController {
     if (!isConnected) return null;
     if (device is! AndroidDevice && device is! IosDevice) return null;
     return service.captureScreenshot();
+  }
+
+  /// Captures one current iOS frame when interactive mirroring is unavailable.
+  Future<void> captureIosFallbackScreenshot() async {
+    if (!isIosMirror || !isConnected || isIosFallbackScreenshotLoading) return;
+    isIosFallbackScreenshotLoading = true;
+    iosFallbackScreenshotError = null;
+    _notify();
+    try {
+      final bytes = await captureScreenshot();
+      if (bytes == null || bytes.isEmpty) {
+        throw StateError('设备未返回截图数据。');
+      }
+      iosFallbackScreenshot = bytes;
+    } catch (error) {
+      iosFallbackScreenshotError = '截取当前画面失败：${describeError(error)}';
+    } finally {
+      isIosFallbackScreenshotLoading = false;
+      _notify();
+    }
   }
 
   /// Cycles the mirrored device's display orientation.

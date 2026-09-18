@@ -32,6 +32,20 @@ class IosMirrorDiagnostic {
     final detail = raw.trim();
     final lower = detail.toLowerCase();
     if (_hasAny(lower, const [
+      'code 9021',
+      'code: 9021',
+      'requires ios 27',
+      'ios 27.0 or later',
+    ])) {
+      return _build(
+        IosMirrorFailureKind.unsupportedSystem,
+        '当前系统暂不支持可控制实时镜像',
+        'Apple 的远程控制服务要求 iOS 27 或以上；当前设备系统无法启动该服务。',
+        '这不是连接故障。你仍可截取当前画面；设备升级到 iOS 27 后可重新检测实时镜像。',
+        detail,
+      );
+    }
+    if (_hasAny(lower, const [
       'developer disk image',
       'personalized image',
       'cryptex',
@@ -61,7 +75,13 @@ class IosMirrorDiagnostic {
         detail,
       );
     }
-    if (_hasAny(lower, const ['camera', 'microphone', 'avcapture'])) {
+    if (_hasAny(lower, const [
+      'code 9022',
+      'code: 9022',
+      'camera',
+      'microphone',
+      'avcapture',
+    ])) {
       return _build(
         IosMirrorFailureKind.mediaInUse,
         '设备媒体通道被占用',
@@ -171,6 +191,19 @@ class IosMirrorDiagnostic {
     title: title,
     message: message,
     suggestion: suggestion,
-    rawDetail: rawDetail,
+    rawDetail: redactForLog(rawDetail),
   );
+
+  /// Removes host and device identifiers before a diagnostic is persisted.
+  static String redactForLog(String raw) {
+    return raw
+        .replaceAll(
+          RegExp(r'C:\\Users\\[^\\\r\n]+', caseSensitive: false),
+          r'C:\Users\<redacted>',
+        )
+        .replaceAll(
+          RegExp(r'\b[0-9a-fA-F]{8}-[0-9a-fA-F]{16}\b'),
+          '<redacted-udid>',
+        );
+  }
 }
