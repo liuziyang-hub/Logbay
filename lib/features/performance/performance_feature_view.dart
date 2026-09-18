@@ -203,11 +203,17 @@ class _PerformanceBody extends StatelessWidget {
     }
     final sample = latest;
     if (sample == null) {
-      return const Center(
+      final connecting = controller.isRunning;
+      return Center(
         child: _Notice(
-          icon: Icons.monitor_heart_outlined,
-          title: '选择应用并开始采集',
-          message: '实时查看 FPS、帧耗时、CPU、内存、网络和温度。\n未提供的指标会显示具体原因，不会用 0 代替。',
+          icon: connecting
+              ? Icons.sync_rounded
+              : Icons.monitor_heart_outlined,
+          title: connecting ? '正在连接性能通道' : '选择应用并开始采集',
+          message: connecting
+              ? 'iOS 首次建立 DVT 通道通常需要 15–30 秒，请保持设备解锁并耐心等待。'
+              : '实时查看 FPS、帧耗时、CPU、内存、网络和温度。\n'
+                    '未提供的指标会显示具体原因，不会用 0 代替。',
         ),
       );
     }

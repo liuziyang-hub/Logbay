@@ -70,32 +70,16 @@ class IosRuntimeBroker {
   Future<IosRuntimeResult> run(
     String udid,
     List<String> arguments, {
-    Duration timeout = const Duration(seconds: 15),
+    Duration timeout = const Duration(seconds: 90),
+    bool serialize = true,
   }) {
+    if (!serialize) return _runNow(udid, arguments, timeout: timeout);
     final previous = _deviceQueues[udid] ?? Future<void>.value();
     final completer = Completer<void>();
     _deviceQueues[udid] = completer.future;
     return previous.catchError((_) {}).then((_) async {
       try {
-        final process = await start(udid, arguments);
-        final stdoutFuture = process.stdout
-            .transform(const Utf8Decoder(allowMalformed: true))
-            .join();
-        final stderrFuture = process.stderr
-            .transform(const Utf8Decoder(allowMalformed: true))
-            .join();
-        int exitCode;
-        try {
-          exitCode = await process.exitCode.timeout(timeout);
-        } on TimeoutException {
-          process.kill(ProcessSignal.sigkill);
-          throw TimeoutException('iOS 运行时命令执行超时。', timeout);
-        }
-        return IosRuntimeResult(
-          exitCode: exitCode,
-          stdout: await stdoutFuture,
-          stderr: await stderrFuture,
-        );
+        return await _runNow(udid, arguments, timeout: timeout);
       } finally {
         completer.complete();
         if (identical(_deviceQueues[udid], completer.future)) {
@@ -105,10 +89,36 @@ class IosRuntimeBroker {
     });
   }
 
+  Future<IosRuntimeResult> _runNow(
+    String udid,
+    List<String> arguments, {
+    required Duration timeout,
+  }) async {
+    final process = await start(udid, arguments);
+    final stdoutFuture = process.stdout
+        .transform(const Utf8Decoder(allowMalformed: true))
+        .join();
+    final stderrFuture = process.stderr
+        .transform(const Utf8Decoder(allowMalformed: true))
+        .join();
+    int exitCode;
+    try {
+      exitCode = await process.exitCode.timeout(timeout);
+    } on TimeoutException {
+      process.kill(ProcessSignal.sigkill);
+      throw TimeoutException('iOS 运行时命令执行超时。', timeout);
+    }
+    return IosRuntimeResult(
+      exitCode: exitCode,
+      stdout: await stdoutFuture,
+      stderr: await stderrFuture,
+    );
+  }
+
   Future<String> readFirstLine(
     String udid,
     List<String> arguments, {
-    Duration timeout = const Duration(seconds: 8),
+    Duration timeout = const Duration(seconds: 45),
   }) async {
     final process = await start(udid, arguments);
     final errors = StringBuffer();

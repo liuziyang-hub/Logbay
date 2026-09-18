@@ -22,7 +22,7 @@ class IosDeveloperImageTool {
     final result = await _run(
       ['mounter', 'list'],
       udid: udid,
-      timeout: const Duration(seconds: 30),
+      timeout: const Duration(seconds: 60),
     );
     return parseMounted(result.stdout);
   }
@@ -93,7 +93,7 @@ class IosDeveloperImageTool {
       command.executable,
       args,
       runInShell: Platform.isWindows,
-      environment: {...Platform.environment, 'PYMOBILEDEVICE3_UDID': udid},
+      environment: _environment(udid),
     );
     final stdout = StringBuffer();
     final stderr = StringBuffer();
@@ -122,11 +122,30 @@ class IosDeveloperImageTool {
     return result;
   }
 
+  static Map<String, String> _environment(String udid) {
+    final environment = {
+      ...Platform.environment,
+      'PYMOBILEDEVICE3_UDID': udid,
+    };
+    final localAppData = Platform.environment['LOCALAPPDATA'];
+    if (localAppData != null) {
+      environment.putIfAbsent(
+        'UV_CACHE_DIR',
+        () => '$localAppData\\Logbay\\uv-cache',
+      );
+    }
+    return environment;
+  }
+
   static String _combined(_CmdResult result) =>
       '${result.stderr}\n${result.stdout}';
 
   static String _friendlyFailure(String raw) {
     final lower = raw.toLowerCase();
+    if (lower.contains('devicelocked') || lower.contains('device locked')) {
+      return 'iPhone 当前处于锁定状态，无法挂载开发者镜像。\n'
+          '请解锁 iPhone 并保持屏幕常亮，然后重新点击“开始镜像”。';
+    }
     if (lower.contains('connection') ||
         lower.contains('urlerror') ||
         lower.contains('timeout') ||

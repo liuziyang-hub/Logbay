@@ -116,8 +116,6 @@ class IosMirrorTool {
     }
 
     await _checkCompatibility(command: command, udid: udid);
-    await _checkServeWebCapability(udid);
-
     try {
       await _imageTool.ensureMounted(udid: udid, onProgress: onProgress);
     } on IosDeveloperImageException catch (error) {
@@ -138,6 +136,7 @@ class IosMirrorTool {
       '--http-port',
       '$port',
       if (noAudio) '--no-audio',
+      '--userspace',
     ];
 
     _logger.info('Starting iOS mirror serve-web on 127.0.0.1:$port');
@@ -248,29 +247,6 @@ class IosMirrorTool {
       installedVersion: installed,
     );
     if (issue != null) throw UnsupportedError(issue);
-  }
-
-  Future<void> _checkServeWebCapability(String udid) async {
-    try {
-      final result = await _runtimeBroker.run(udid, [
-        'developer',
-        'core-device',
-        'display',
-        'serve-web',
-        '--help',
-      ], timeout: const Duration(seconds: 12));
-      final output = '${result.stdout}\n${result.stderr}'.toLowerCase();
-      if (result.exitCode != 0 ||
-          (!output.contains('serve-web') && !output.contains('http-port'))) {
-        throw const IosMirrorException(
-          '当前 iOS 运行时不包含实时投屏能力。请升级 Logbay 内置运行时后重试。',
-        );
-      }
-    } on IosMirrorException {
-      rethrow;
-    } catch (error) {
-      throw IosMirrorException('检查 iOS 投屏能力失败：$error');
-    }
   }
 
   @visibleForTesting

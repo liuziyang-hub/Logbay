@@ -8,7 +8,7 @@
 ; never leave two icons.
 
 #define MyAppName "Logbay"
-#define MyAppVersion "1.5.0"
+#define MyAppVersion "1.5.1"
 #define MyAppPublisher "Logbay"
 #define MyAppURL "https://github.com/liuziyang-hub/Logbay"
 #define MyAppExeName "eagly.exe"

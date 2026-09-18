@@ -4,8 +4,11 @@ import 'package:flutter_test/flutter_test.dart';
 
 class _Runner implements IosMetricsCommandRunner {
   int systemCall = 0;
+  final commands = <List<String>>[];
+
   @override
   Future<String> run(List<String> arguments, {required String udid}) async {
+    commands.add(arguments);
     if (arguments.contains('process-id-for-bundle-id')) return '2468\n';
     if (arguments.contains('system')) {
       systemCall++;
@@ -20,6 +23,7 @@ class _Runner implements IosMetricsCommandRunner {
     List<String> arguments, {
     required String udid,
   }) async {
+    commands.add(arguments);
     if (arguments.contains('graphics')) {
       return '{"CoreAnimationFramesPerSecond":60}';
     }
@@ -29,7 +33,8 @@ class _Runner implements IosMetricsCommandRunner {
 
 void main() {
   test('collects process metrics and computes network deltas', () async {
-    final backend = IosPerformanceBackend(deviceId: 'ios-1', runner: _Runner());
+    final runner = _Runner();
+    final backend = IosPerformanceBackend(deviceId: 'ios-1', runner: runner);
     final stream = backend.start(
       const PerformanceCollectionRequest(
         applicationId: 'Demo',
@@ -46,6 +51,12 @@ void main() {
     expect(samples.first.networkRxBytes, isNull);
     expect(samples.last.networkRxBytes, 100);
     expect(samples.last.networkTxBytes, 50);
+    expect(
+      runner.commands
+          .where((command) => command.contains('dvt'))
+          .every((command) => command.contains('--userspace')),
+      isTrue,
+    );
   });
 
   test('resolves bundle identifiers with the upstream DVT command', () async {
@@ -63,4 +74,32 @@ void main() {
 
     expect(sample.cpuPercent, 7.5);
   });
+
+  test(
+    'skips the expensive all-process snapshot without an app target',
+    () async {
+      final runner = _Runner();
+      final backend = IosPerformanceBackend(deviceId: 'ios-1', runner: runner);
+
+      final sample = await backend
+          .start(
+            const PerformanceCollectionRequest(
+              sampleInterval: Duration(milliseconds: 1),
+            ),
+          )
+          .first;
+      await backend.stop();
+
+      expect(sample.cpuPercent, isNull);
+      expect(sample.memoryBytes, isNull);
+      expect(sample.unavailableReasons.values, contains('请输入应用包名或进程名后采集。'));
+      expect(
+        runner.commands.any(
+          (command) =>
+              command.contains('process') && command.contains('single'),
+        ),
+        isFalse,
+      );
+    },
+  );
 }

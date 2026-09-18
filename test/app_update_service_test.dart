@@ -12,4 +12,14 @@ void main() {
       ),
     );
   });
+
+  test('Windows updater executes its wait and install statements', () {
+    final command = AppUpdateService.windowsInstallerCommand;
+
+    expect(command, startsWith(r'param([int]$appProcessId'));
+    expect(command, contains(r'); while (Get-Process'));
+    expect(command, contains(r'Start-Process -FilePath $installerPath'));
+    expect(command, contains('/LANG=chinesesimplified'));
+    expect(command, isNot(contains(r'$installerPath) {')));
+  });
 }

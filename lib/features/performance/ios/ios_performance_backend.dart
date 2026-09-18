@@ -20,7 +20,12 @@ class Pymobiledevice3MetricsCommandRunner implements IosMetricsCommandRunner {
 
   @override
   Future<String> run(List<String> arguments, {required String udid}) async {
-    final result = await _broker.run(udid, arguments);
+    final result = await _broker.run(
+      udid,
+      arguments,
+      timeout: const Duration(seconds: 90),
+      serialize: false,
+    );
     if (result.exitCode != 0) {
       final detail = result.stderr.trim();
       throw StateError(detail.isEmpty ? 'iOS 性能采集命令执行失败。' : detail);
@@ -70,6 +75,11 @@ class IosPerformanceBackend extends DevicePerformanceBackend {
     final reasons = <PerformanceMetric, String>{};
     await Future.wait([
       () async {
+        if (processName == null || processName.trim().isEmpty) {
+          reasons[PerformanceMetric.cpu] = '请输入应用包名或进程名后采集。';
+          reasons[PerformanceMetric.memory] = '请输入应用包名或进程名后采集。';
+          return;
+        }
         try {
           final filter = await _resolveProcessFilter(processName);
           final output = await _runner.run([
@@ -85,6 +95,7 @@ class IosPerformanceBackend extends DevicePerformanceBackend {
             'cpuUsage',
             '--key',
             'physFootprint',
+            '--userspace',
           ], udid: deviceId);
           process = IosMetricParsers.process(output);
         } catch (error) {
@@ -101,6 +112,7 @@ class IosPerformanceBackend extends DevicePerformanceBackend {
             'system',
             '--fields',
             'netBytesIn,netBytesOut',
+            '--userspace',
           ], udid: deviceId);
           system = IosMetricParsers.system(output);
         } catch (error) {
@@ -114,6 +126,7 @@ class IosPerformanceBackend extends DevicePerformanceBackend {
             'developer',
             'dvt',
             'graphics',
+            '--userspace',
           ], udid: deviceId);
           fps = IosMetricParsers.fps(output);
         } catch (error) {
@@ -203,6 +216,7 @@ class IosPerformanceBackend extends DevicePerformanceBackend {
       'dvt',
       'process-id-for-bundle-id',
       value,
+      '--userspace',
     ], udid: deviceId);
     final pid = RegExp(r'\b\d+\b').firstMatch(output)?.group(0);
     if (pid == null) throw StateError('目标应用尚未运行：$value');

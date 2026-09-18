@@ -85,25 +85,13 @@ class AppUpdateService {
     }
 
     if (Platform.isWindows) {
-      final ps = StringBuffer()
-        ..write('param([int]\$appProcessId, [string]\$installerPath) { ')
-        ..write(
-          'while (Get-Process -Id \$appProcessId '
-          '-ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 100 }; ',
-        )
-        ..write(
-          'Start-Process -FilePath \$installerPath -ArgumentList '
-          "'/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"
-          "'/CLOSEAPPLICATIONS','/FORCECLOSEAPPLICATIONS' ",
-        )
-        ..write('}');
       await Process.start('powershell.exe', [
         '-NoProfile',
         '-NonInteractive',
         '-WindowStyle',
         'Hidden',
         '-Command',
-        ps.toString(),
+        windowsInstallerCommand,
         '$pid',
         installer.path,
       ], mode: ProcessStartMode.detached);
@@ -122,6 +110,20 @@ class AppUpdateService {
 
     exit(0);
   }
+
+  /// PowerShell command used by the detached Windows updater.
+  ///
+  /// The parameter declaration must end before the wait/install statements.
+  /// Wrapping those statements in `{ ... }` would only create a script-block
+  /// value and never execute the installer.
+  static String get windowsInstallerCommand =>
+      'param([int]\$appProcessId, [string]\$installerPath); '
+      'while (Get-Process -Id \$appProcessId '
+      '-ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 100 }; '
+      'Start-Process -FilePath \$installerPath -ArgumentList '
+      "'/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"
+      "'/CLOSEAPPLICATIONS','/FORCECLOSEAPPLICATIONS',"
+      "'/LANG=chinesesimplified'";
 
   static String _stripV(String tag) =>
       tag.startsWith('v') || tag.startsWith('V') ? tag.substring(1) : tag;

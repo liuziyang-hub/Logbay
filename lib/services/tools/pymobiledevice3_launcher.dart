@@ -96,6 +96,10 @@ class Pymobiledevice3Launcher {
             out.contains('syslog') ||
             out.contains('usage') ||
             out.contains('pymobiledevice3')) {
+          if (Platform.isWindows && candidate.prefixArgs.contains('tool')) {
+            final managed = _managedWindowsCommand();
+            if (managed != null) return managed;
+          }
           return candidate;
         }
       } catch (_) {
@@ -110,12 +114,9 @@ class Pymobiledevice3Launcher {
       final appData = Platform.environment['APPDATA'];
       final localAppData = Platform.environment['LOCALAPPDATA'];
       return [
+        if (_managedWindowsCommand(appData: appData) case final managed?)
+          managed,
         if (_bundledWindowsCommand() case final bundled?) bundled,
-        if (appData != null)
-          Pymobiledevice3Command(
-            '$appData\\uv\\tools\\pymobiledevice3\\Scripts\\pymobiledevice3.exe',
-            const [],
-          ),
         if (localAppData != null &&
             File('$localAppData\\Programs\\uv\\uv.exe').existsSync())
           Pymobiledevice3Command('$localAppData\\Programs\\uv\\uv.exe', const [
@@ -147,6 +148,16 @@ class Pymobiledevice3Launcher {
     final directory = resolveBundledToolsDirectory();
     if (directory == null) return null;
     return bundledWindowsCommandIn(directory);
+  }
+
+  static Pymobiledevice3Command? _managedWindowsCommand({String? appData}) {
+    final root = appData ?? Platform.environment['APPDATA'];
+    if (root == null) return null;
+    final executable = File(
+      '$root\\uv\\tools\\pymobiledevice3\\Scripts\\pymobiledevice3.exe',
+    );
+    if (!executable.existsSync()) return null;
+    return Pymobiledevice3Command(executable.path, const []);
   }
 
   @visibleForTesting
