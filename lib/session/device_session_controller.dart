@@ -12,6 +12,7 @@ import '../features/device_info/device_info_controller.dart';
 import '../features/file_manager/file_manager_controller.dart';
 import '../features/logs/log_session_manager.dart';
 import '../features/mirror/mirror_controller.dart';
+import '../features/performance/performance_controller.dart';
 import '../features/terminal/terminal_session_manager.dart';
 import '../features/utilities/utilities_controller.dart';
 import '../services/app_breadcrumbs.dart';
@@ -102,6 +103,7 @@ class DeviceSessionController extends ChangeNotifier {
   AdbShellController? _adbShellController;
   TerminalSessionManager? _terminalSessionManager;
   UtilitiesController? _utilitiesController;
+  PerformanceController? _performanceController;
 
   bool _homeOpen = true;
   bool _logsOpen = false;
@@ -113,6 +115,7 @@ class DeviceSessionController extends ChangeNotifier {
   bool _adbShellOpen = false;
   bool _terminalOpen = false;
   bool _utilitiesOpen = false;
+  bool _performanceOpen = false;
   bool _activated = false;
   bool _disposed = false;
 
@@ -128,6 +131,7 @@ class DeviceSessionController extends ChangeNotifier {
   bool get isAdbShellOpen => _adbShellOpen;
   bool get isTerminalOpen => _terminalOpen;
   bool get isUtilitiesOpen => _utilitiesOpen;
+  bool get isPerformanceOpen => _performanceOpen;
   bool get isLogsOpen => _logsOpen;
   bool get isHomeOpen => _homeOpen;
   bool get isActivated => _activated;
@@ -144,7 +148,8 @@ class DeviceSessionController extends ChangeNotifier {
         !_deviceInfoOpen &&
         !_adbShellOpen &&
         !_terminalOpen &&
-        !_utilitiesOpen) {
+        !_utilitiesOpen &&
+        !_performanceOpen) {
       _homeOpen = true;
     }
   }
@@ -210,6 +215,9 @@ class DeviceSessionController extends ChangeNotifier {
 
   UtilitiesController get utilitiesController =>
       _utilitiesController ??= UtilitiesController(this);
+
+  PerformanceController get performanceController => _performanceController ??=
+      PerformanceController(this, backend: service.createPerformanceBackend());
 
   /// Screencap / iOS screenshot — does not require the mirror pane to be open.
   Future<Uint8List?> captureScreenshot() async {
@@ -468,6 +476,26 @@ class DeviceSessionController extends ChangeNotifier {
   void toggleUtilities() =>
       _utilitiesOpen && !_homeOpen ? closeUtilities() : openUtilities();
 
+  void openPerformance() {
+    final viewChanged = _homeOpen || !_performanceOpen;
+    _performanceOpen = true;
+    _homeOpen = false;
+    if (viewChanged) {
+      _navigate('性能分析');
+      _notify();
+    }
+  }
+
+  void closePerformance() {
+    if (!_performanceOpen) return;
+    _performanceOpen = false;
+    _ensureSelection();
+    _notify();
+  }
+
+  void togglePerformance() =>
+      _performanceOpen && !_homeOpen ? closePerformance() : openPerformance();
+
   // ── App install (device-level) ──────────────────────────────────────────
   bool _isInstallingApp = false;
   String? _installingAppName;
@@ -697,6 +725,7 @@ class DeviceSessionController extends ChangeNotifier {
     _adbShellController?.dispose();
     _terminalSessionManager?.dispose();
     _utilitiesController?.dispose();
+    _performanceController?.dispose();
     unawaited(service.dispose());
     super.dispose();
   }
