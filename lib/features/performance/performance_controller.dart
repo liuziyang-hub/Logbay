@@ -1,6 +1,9 @@
 import 'dart:async';
 
+import 'package:flutter/services.dart';
+
 import '../../session/feature_controller.dart';
+import 'android/perfetto_capture_service.dart';
 import 'data/performance_sample.dart';
 import 'data/performance_session.dart';
 import 'services/device_performance_backend.dart';
@@ -11,9 +14,19 @@ class PerformanceController extends FeatureController {
   PerformanceController(
     super.session, {
     required DevicePerformanceBackend backend,
-  }) : _backend = backend;
+    PerfettoCaptureService? perfettoCaptureService,
+    Future<String> Function()? loadPerfettoConfig,
+  }) : _backend = backend,
+       _perfettoCaptureService = perfettoCaptureService,
+       _loadPerfettoConfig =
+           loadPerfettoConfig ??
+           (() => rootBundle.loadString(
+             'assets/perfetto/default_android_config.pbtx',
+           ));
 
   final DevicePerformanceBackend _backend;
+  final PerfettoCaptureService? _perfettoCaptureService;
+  final Future<String> Function() _loadPerfettoConfig;
 
   PerformanceCollectionState _state = PerformanceCollectionState.idle;
   PerformanceSession? _currentSession;
@@ -21,6 +34,8 @@ class PerformanceController extends FeatureController {
   String? _errorMessage;
   int _generation = 0;
   bool _disposed = false;
+  PerfettoCaptureSession? _perfettoSession;
+  bool _traceOperationInProgress = false;
   double paneWidth = 760;
 
   PerformanceCollectionState get state => _state;
@@ -28,6 +43,9 @@ class PerformanceController extends FeatureController {
   List<PerformanceSample> get samples => _currentSession?.samples ?? const [];
   String? get errorMessage => _errorMessage;
   bool get isRunning => _state == PerformanceCollectionState.running;
+  bool get supportsPerfetto => _perfettoCaptureService != null;
+  bool get isTraceRecording => _perfettoSession != null;
+  bool get isTraceOperationInProgress => _traceOperationInProgress;
 
   void setPaneWidth(double width) {
     final clamped = width.clamp(420.0, 1200.0);
@@ -104,6 +122,56 @@ class PerformanceController extends FeatureController {
     _notify();
   }
 
+  Future<void> startPerfettoTrace({String? applicationId}) async {
+    if (_disposed || _traceOperationInProgress || _perfettoSession != null) {
+      return;
+    }
+    final capture = _perfettoCaptureService;
+    if (capture == null) {
+      _fail('Perfetto 轨迹录制仅支持 Android 设备。');
+      return;
+    }
+    _traceOperationInProgress = true;
+    _errorMessage = null;
+    _notify();
+    try {
+      final config = await _loadPerfettoConfig();
+      _perfettoSession = await capture.start(
+        config: config,
+        applicationId: applicationId,
+      );
+    } catch (error) {
+      _errorMessage = _friendlyError(error);
+    } finally {
+      _traceOperationInProgress = false;
+      _notify();
+    }
+  }
+
+  Future<void> stopPerfettoTrace(String localPath) async {
+    final trace = _perfettoSession;
+    if (trace == null || _traceOperationInProgress) return;
+    _traceOperationInProgress = true;
+    _notify();
+    try {
+      await trace.stopAndPull(localPath);
+      _perfettoSession = null;
+    } catch (error) {
+      _perfettoSession = null;
+      _errorMessage = _friendlyError(error);
+    } finally {
+      _traceOperationInProgress = false;
+      _notify();
+    }
+  }
+
+  Future<void> cancelPerfettoTrace() async {
+    final trace = _perfettoSession;
+    _perfettoSession = null;
+    if (trace != null) await trace.cancel();
+    _notify();
+  }
+
   void _handleSample(PerformanceSample sample, int generation) {
     if (_disposed || generation != _generation) return;
     _currentSession?.add(sample);
@@ -141,6 +209,7 @@ class PerformanceController extends FeatureController {
   @override
   void onDeviceDisconnected() {
     unawaited(stop());
+    unawaited(cancelPerfettoTrace());
   }
 
   @override
@@ -151,6 +220,8 @@ class PerformanceController extends FeatureController {
     _subscription = null;
     unawaited(subscription?.cancel());
     unawaited(_backend.dispose());
+    unawaited(_perfettoSession?.cancel());
+    _perfettoSession = null;
     _currentSession?.finish();
     super.dispose();
   }

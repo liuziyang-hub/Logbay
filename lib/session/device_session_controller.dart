@@ -216,8 +216,12 @@ class DeviceSessionController extends ChangeNotifier {
   UtilitiesController get utilitiesController =>
       _utilitiesController ??= UtilitiesController(this);
 
-  PerformanceController get performanceController => _performanceController ??=
-      PerformanceController(this, backend: service.createPerformanceBackend());
+  PerformanceController get performanceController =>
+      _performanceController ??= PerformanceController(
+        this,
+        backend: service.createPerformanceBackend(),
+        perfettoCaptureService: service.createPerfettoCaptureService(),
+      );
 
   /// Screencap / iOS screenshot — does not require the mirror pane to be open.
   Future<Uint8List?> captureScreenshot() async {

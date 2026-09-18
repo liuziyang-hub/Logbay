@@ -1,10 +1,12 @@
 import 'dart:async';
 
 import 'package:eagly/data/device.dart';
+import 'package:eagly/features/performance/android/perfetto_capture_service.dart';
 import 'package:eagly/features/performance/data/performance_sample.dart';
 import 'package:eagly/features/performance/performance_controller.dart';
 import 'package:eagly/features/performance/services/device_performance_backend.dart';
 import 'package:eagly/session/device_session_controller.dart';
+import 'package:eagly/services/tools/tool_process_runner.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/session_test_support.dart';
@@ -37,6 +39,41 @@ class _FakePerformanceBackend extends DevicePerformanceBackend {
     stopCount++;
     await controller?.close();
     controller = null;
+  }
+}
+
+class _PerfettoTransport implements PerfettoTransport {
+  final List<List<String>> shellCalls = [];
+  String? pulledTo;
+
+  @override
+  Future<List<int>> execOut(List<String> arguments) async => const [];
+
+  @override
+  Future<void> pull(String devicePath, String localPath) async {
+    pulledTo = localPath;
+  }
+
+  @override
+  Future<void> pushText(String content, String devicePath) async {}
+
+  @override
+  Future<ToolCommandResult> shell(
+    List<String> arguments, {
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    shellCalls.add(arguments);
+    if (arguments.first == 'perfetto') {
+      return const ToolCommandResult(
+        exitCode: 0,
+        stdout: 'pid: 42',
+        stderr: '',
+      );
+    }
+    if (arguments.first == 'kill' && arguments[1] == '-0') {
+      return const ToolCommandResult(exitCode: 1, stdout: '', stderr: '');
+    }
+    return const ToolCommandResult(exitCode: 0, stdout: '', stderr: '');
   }
 }
 
@@ -143,4 +180,22 @@ void main() {
       expect(controller.currentSession?.endedAt, isNotNull);
     },
   );
+
+  test('records and saves an Android Perfetto trace', () async {
+    final transport = _PerfettoTransport();
+    controller.dispose();
+    controller = PerformanceController(
+      session,
+      backend: backend,
+      perfettoCaptureService: PerfettoCaptureService(transport: transport),
+      loadPerfettoConfig: () async => 'buffers: {}',
+    );
+
+    await controller.startPerfettoTrace(applicationId: 'com.example.app');
+    expect(controller.isTraceRecording, isTrue);
+
+    await controller.stopPerfettoTrace('C:\\temp\\demo.perfetto-trace');
+    expect(controller.isTraceRecording, isFalse);
+    expect(transport.pulledTo, 'C:\\temp\\demo.perfetto-trace');
+  });
 }

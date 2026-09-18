@@ -12,6 +12,7 @@ import '../features/device_info/data/device_details.dart';
 import '../features/logs/data/models/log_entry.dart';
 import '../features/performance/services/device_performance_backend.dart';
 import '../features/performance/android/android_performance_backend.dart';
+import '../features/performance/android/perfetto_capture_service.dart';
 import '../features/performance/ios/ios_performance_backend.dart';
 import '../features/terminal/data/terminal_line.dart';
 import '../features/terminal/data/terminal_process.dart';
@@ -315,6 +316,13 @@ class DeviceSessionRepository {
       ),
       IosDevice() => IosPerformanceBackend(deviceId: _deviceId),
     };
+  }
+
+  PerfettoCaptureService? createPerfettoCaptureService() {
+    if (device is! AndroidDevice) return null;
+    return PerfettoCaptureService(
+      transport: AdbPerfettoTransport(adbTool: _adbTool, deviceId: _deviceId),
+    );
   }
 
   /// Starts interactive `adb shell` (Android only). Caller owns the [Process].

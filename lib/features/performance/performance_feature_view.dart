@@ -1,3 +1,4 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../presentation/components/feature_view.dart';
@@ -5,6 +6,8 @@ import '../../utils/utils.dart';
 import 'data/performance_metric.dart';
 import 'data/performance_sample.dart';
 import 'performance_controller.dart';
+import 'services/performance_export_service.dart';
+import 'services/performance_statistics.dart';
 
 class PerformanceFeatureView extends FeatureView {
   const PerformanceFeatureView({
@@ -22,6 +25,8 @@ class PerformanceFeatureView extends FeatureView {
 class _PerformanceFeatureViewState
     extends FeatureViewState<PerformanceFeatureView> {
   final TextEditingController _applicationController = TextEditingController();
+  final PerformanceExportService _exportService =
+      const PerformanceExportService();
 
   @override
   Listenable get listenable => widget.controller;
@@ -42,6 +47,47 @@ class _PerformanceFeatureViewState
     await widget.controller.start(
       applicationId: application.isEmpty ? null : application,
     );
+  }
+
+  Future<void> _export(PerformanceExportFormat format) async {
+    final session = widget.controller.currentSession;
+    if (session == null || session.samples.isEmpty) return;
+    try {
+      final path = await _exportService.exportWithDialog(session, format);
+      if (!mounted || path == null) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('性能数据已导出：$path')));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('导出性能数据失败：$error')));
+    }
+  }
+
+  Future<void> _togglePerfetto() async {
+    final controller = widget.controller;
+    if (!controller.isTraceRecording) {
+      final application = _applicationController.text.trim();
+      await controller.startPerfettoTrace(
+        applicationId: application.isEmpty ? null : application,
+      );
+      return;
+    }
+    final path = await FilePicker.platform.saveFile(
+      dialogTitle: '保存 Perfetto 轨迹',
+      fileName:
+          'Logbay-${DateTime.now().millisecondsSinceEpoch}.perfetto-trace',
+      allowedExtensions: const ['perfetto-trace'],
+      type: FileType.custom,
+    );
+    if (path == null) return;
+    await controller.stopPerfettoTrace(path);
+    if (!mounted || controller.errorMessage != null) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('Perfetto 轨迹已保存：$path')));
   }
 
   @override
@@ -76,6 +122,36 @@ class _PerformanceFeatureViewState
                   : Icons.play_arrow_rounded,
             ),
             label: Text(controller.isRunning ? '停止采集' : '开始采集'),
+          ),
+          if (controller.supportsPerfetto)
+            OutlinedButton.icon(
+              onPressed: controller.isTraceOperationInProgress
+                  ? null
+                  : _togglePerfetto,
+              icon: Icon(
+                controller.isTraceRecording
+                    ? Icons.stop_circle_outlined
+                    : Icons.fiber_manual_record_rounded,
+              ),
+              label: Text(
+                controller.isTraceRecording ? '停止并保存轨迹' : '录制 Perfetto',
+              ),
+            ),
+          PopupMenuButton<PerformanceExportFormat>(
+            tooltip: '导出性能数据',
+            enabled: controller.samples.isNotEmpty,
+            onSelected: _export,
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: PerformanceExportFormat.csv,
+                child: Text('导出 CSV 数据'),
+              ),
+              PopupMenuItem(
+                value: PerformanceExportFormat.json,
+                child: Text('导出 JSON 会话'),
+              ),
+            ],
+            icon: const Icon(Icons.file_download_outlined),
           ),
           const SizedBox(width: 6),
         ],
@@ -135,6 +211,7 @@ class _PerformanceBody extends StatelessWidget {
         ),
       );
     }
+    final summary = PerformanceStatistics.summarize(controller.samples);
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -196,6 +273,44 @@ class _PerformanceBody extends StatelessWidget {
         Card(
           child: Padding(
             padding: const EdgeInsets.all(16),
+            child: Wrap(
+              spacing: 28,
+              runSpacing: 12,
+              children: [
+                _SummaryValue(
+                  label: '平均 FPS',
+                  value: summary.fps?.average.toStringAsFixed(1) ?? '—',
+                ),
+                _SummaryValue(
+                  label: 'P95 帧耗时',
+                  value: summary.frameTimeMs == null
+                      ? '—'
+                      : '${summary.frameTimeMs!.p95.toStringAsFixed(1)} ms',
+                ),
+                _SummaryValue(
+                  label: 'CPU 峰值',
+                  value: summary.cpuPercent == null
+                      ? '—'
+                      : '${summary.cpuPercent!.maximum.toStringAsFixed(1)}%',
+                ),
+                _SummaryValue(
+                  label: '内存峰值',
+                  value: summary.memoryBytes == null
+                      ? '—'
+                      : formatBytes(summary.memoryBytes!.maximum.round()),
+                ),
+                _SummaryValue(
+                  label: '低帧持续时间',
+                  value: '${summary.lowFpsDuration.inSeconds} 秒',
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -239,6 +354,28 @@ class _PerformanceBody extends StatelessWidget {
 
   static String? _number(double? value, int fractionDigits) =>
       value?.toStringAsFixed(fractionDigits);
+}
+
+class _SummaryValue extends StatelessWidget {
+  const _SummaryValue({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 150,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: Theme.of(context).textTheme.labelMedium),
+          const SizedBox(height: 4),
+          Text(value, style: Theme.of(context).textTheme.titleMedium),
+        ],
+      ),
+    );
+  }
 }
 
 class _MetricCard extends StatelessWidget {
