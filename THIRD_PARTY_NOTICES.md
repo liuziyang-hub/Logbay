@@ -38,5 +38,12 @@ Logbay 不宣称拥有这些项目的著作权。
 - 许可证：LGPL-2.1-or-later
 - 用途：传统 iOS 设备发现、日志、安装、截图和文件访问。
 
+## Inno Setup 简体中文翻译
+
+- 固定提交：`1ff90acc4ed4aee82b1cda43253243deee3daed4`
+- 来源：https://github.com/kira-96/Inno-Setup-Chinese-Simplified-Translation
+- 维护者：Zhenghan Yang（Kira）
+- 用途：为 Windows 安装与卸载流程提供专业简体中文界面。
+
 完整许可证文本和依赖清单应随 Release 源代码一并提供；发布前由
 `scripts/verify_runtime_manifest.ps1` 校验运行时文件完整性。

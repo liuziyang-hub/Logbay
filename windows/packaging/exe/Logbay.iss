@@ -51,9 +51,10 @@ VersionInfoProductVersion={#MyAppVersion}
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
+Name: "chinesesimplified"; MessagesFile: "ChineseSimplified.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"; Flags: checkedonce
+Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加快捷方式："; Flags: checkedonce
 
 [Files]
 Source: "{#MyAppSource}"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs restartreplace uninsrestartdelete
@@ -72,7 +73,7 @@ Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "启动 {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 [Code]
 procedure DeleteShortcutIfExists(const FilePath: string);
@@ -101,7 +102,7 @@ begin
   RemoveNamedDesktopShortcuts(ExpandConstant('{commondesktop}'));
   RemoveNamedDesktopShortcuts(ExpandConstant('{userdesktop}'));
 
-  UsersDir := ExpandConstant('{root}\Users');
+  UsersDir := AddBackslash(ExtractFileDrive(ExpandConstant('{win}'))) + 'Users';
   if not DirExists(UsersDir) then
     Exit;
 
@@ -137,7 +138,7 @@ var
 begin
   RemoveNamedDesktopShortcuts(ExpandConstant('{userdesktop}'));
 
-  UsersDir := ExpandConstant('{root}\Users');
+  UsersDir := AddBackslash(ExtractFileDrive(ExpandConstant('{win}'))) + 'Users';
   if not DirExists(UsersDir) then
     Exit;
 
