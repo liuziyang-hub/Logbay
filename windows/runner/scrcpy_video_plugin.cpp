@@ -35,11 +35,14 @@ class WinTextureSession {
   }
 
   ~WinTextureSession() {
-    // Stop decoding (joins the worker) before the texture is torn down.
-    decoder_.reset();
+    Stop();
   }
 
   int64_t texture_id() const { return texture_id_; }
+
+  // Stop the worker while the Flutter texture is still registered. This
+  // prevents a late frame callback from racing texture unregistration.
+  void Stop() { decoder_.reset(); }
 
   void Feed(const uint8_t* data, size_t size) {
     if (decoder_) decoder_->Feed(data, size);
@@ -129,11 +132,18 @@ class ScrcpyVideoPlugin : public flutter::Plugin {
       } else if (const auto* i32 = std::get_if<int32_t>(&it->second)) {
         id = *i32;
       }
+      std::unique_ptr<WinTextureSession> session;
       {
         std::lock_guard<std::mutex> lock(sessions_mutex_);
-        sessions_.erase(id);
+        const auto session_it = sessions_.find(id);
+        if (session_it != sessions_.end()) {
+          session = std::move(session_it->second);
+          sessions_.erase(session_it);
+        }
       }
+      if (session) session->Stop();
       textures_->UnregisterTexture(id);
+      session.reset();
       result->Success();
     } else {
       result->NotImplemented();

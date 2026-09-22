@@ -1,7 +1,7 @@
 display_name: Logbay
 publisher_display_name: Logbay
 identity_name: com.gyanoba.logbay
-msix_version: 1.5.3.53
+msix_version: 1.5.4.54
 logo_path: macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_1024.png
 architecture: x64
 publisher: CN=Logbay
