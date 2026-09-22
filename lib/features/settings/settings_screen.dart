@@ -66,8 +66,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _saveLogLinesLimit() async {
     final parsed = int.tryParse(_logLinesController.text.trim());
-    if (parsed == null || parsed < 1000) {
-      _showSnackBar('最大行数至少为 1000。');
+    if (parsed == null ||
+        parsed < 1000 ||
+        parsed > PreferencesService.maxLogLinesLimit) {
+      _showSnackBar('最大行数应在 1000–${PreferencesService.maxLogLinesLimit} 之间。');
       return;
     }
 

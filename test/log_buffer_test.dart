@@ -2,81 +2,41 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:eagly/utils/log_buffer.dart';
 
 void main() {
-  test(
-    'retains overflow until threshold and evicts matching entries in batches',
-    () {
-      final buffer = LogBuffer<String>(baseCapacity: 3);
-      buffer.setFilter((log) => log.startsWith('keep'));
+  test('retains only the newest entries up to the line limit', () {
+    final buffer = LogBuffer<String>(baseCapacity: 3);
 
-      for (final value in [
-        'keep-1',
-        'drop-1',
-        'drop-2',
-        'keep-2',
-        'drop-3',
-        'drop-4',
-        'drop-5',
-      ]) {
-        expect(buffer.append(value), isEmpty);
-      }
-
-      expect(buffer.getLogs(), [
-        'keep-1',
-        'drop-1',
-        'drop-2',
-        'keep-2',
-        'drop-3',
-        'drop-4',
-        'drop-5',
-      ]);
-
-      expect(buffer.append('drop-6'), ['drop-1', 'drop-2']);
-
-      expect(buffer.getLogs(), [
-        'keep-1',
-        'keep-2',
-        'drop-3',
-        'drop-4',
-        'drop-5',
-        'drop-6',
-      ]);
-    },
-  );
-
-  test('reclassifies existing entries when the active filter changes', () {
-    final buffer = LogBuffer<String>(baseCapacity: 2);
-    buffer.setFilter((log) => log.startsWith('a'));
-
-    for (final value in ['a1', 'b1', 'b2', 'a2']) {
+    for (final value in ['a', 'b', 'c', 'd']) {
       buffer.append(value);
     }
 
-    buffer.setFilter((log) => log.startsWith('b'));
-    expect(buffer.append('b3'), isEmpty);
-    expect(buffer.getLogs(), ['a1', 'b1', 'b2', 'a2', 'b3']);
-
-    expect(buffer.append('b4'), ['a1', 'a2']);
-    expect(buffer.getLogs(), ['b1', 'b2', 'b3', 'b4']);
+    expect(buffer.getLogs(), ['b', 'c', 'd']);
+    expect(buffer.bytes, 0);
   });
 
-  test(
-    'shrinks buffered overflow in batches after removing an active filter',
-    () {
-      final buffer = LogBuffer<String>(baseCapacity: 2);
-      buffer.setFilter((_) => true);
+  test('evicts oldest entries when the byte limit is reached', () {
+    final buffer = LogBuffer<String>(
+      baseCapacity: 10,
+      maxBytes: 5,
+      sizeOf: (value) => value.length,
+    );
 
-      for (final value in ['a', 'b', 'c', 'd']) {
-        buffer.append(value);
-      }
+    buffer.append('aa');
+    buffer.append('bbb');
+    expect(buffer.getLogs(), ['aa', 'bbb']);
 
-      buffer.setFilter(null);
-      expect(buffer.getLogs(), ['c', 'd']);
+    expect(buffer.append('cccc'), ['aa', 'bbb']);
+    expect(buffer.getLogs(), ['cccc']);
+    expect(buffer.bytes, 4);
+  });
 
-      buffer.append('e');
-      expect(buffer.getLogs(), ['c', 'd', 'e']);
+  test('keeps one entry even when it exceeds the byte limit', () {
+    final buffer = LogBuffer<String>(
+      baseCapacity: 10,
+      maxBytes: 2,
+      sizeOf: (value) => value.length,
+    );
 
-      buffer.append('f');
-      expect(buffer.getLogs(), ['e', 'f']);
-    },
-  );
+    expect(buffer.append('large'), isEmpty);
+    expect(buffer.getLogs(), ['large']);
+  });
 }

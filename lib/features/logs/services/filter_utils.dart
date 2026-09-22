@@ -39,13 +39,22 @@ bool matchesLogFilters(
     return false;
   }
 
-  // Only force the cached lowercase concatenation when there's actually a
-  // raw-term filter to test against — building it for every entry regardless
-  // (even with no raw filter active) doubled per-entry text memory for no
-  // reason.
-  if (appliedFilters.rawTerms.isNotEmpty &&
-      !_matchesAllTerms(log.lowercaseSearchable, appliedFilters.rawTerms)) {
-    return false;
+  if (appliedFilters.rawTerms.isNotEmpty) {
+    final candidates = <String>[
+      log.timestamp,
+      log.pid,
+      log.tid,
+      log.level,
+      log.tag,
+      log.message,
+      if (log.packageName != null) log.packageName!,
+      if (log.processName != null) log.processName!,
+      if (log.subsystem != null) log.subsystem!,
+      if (log.category != null) log.category!,
+    ];
+    if (appliedFilters.rawTerms.any((term) => !term.matchesAny(candidates))) {
+      return false;
+    }
   }
 
   if (appliedFilters.pidTidTerms.isNotEmpty) {

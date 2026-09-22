@@ -6,6 +6,7 @@ import '../../../data/device.dart';
 import '../data/models/log_entry.dart';
 import '../../../utils/utils.dart';
 import 'log_formats/log_formats.dart';
+import 'log_session_archive.dart';
 import '../../../services/preferences_service.dart';
 
 class LogExportResult {
@@ -78,18 +79,34 @@ class LogFileService {
     List<LogEntry> logs,
     Device? device, {
     LogFormat format = defaultFormat,
+    LogSessionArchive? archive,
   }) async {
-    if (logs.isEmpty) {
+    if (logs.isEmpty && (archive == null || archive.entryCount == 0)) {
       return LogExportResult.failure(error: '没有可导出的日志。');
+    }
+    if (archive != null && !archive.isAvailable) {
+      return LogExportResult.failure(
+        error: '完整日志归档不可用：${describeError(archive.error!)}。请重新开始日志后再导出。',
+      );
     }
 
     final initialDirectory = await _resolveInitialDirectory();
 
-    final exported = format.export(logs, device: device);
+    final canStreamArchive =
+        archive != null &&
+        archive.isAvailable &&
+        archive.entryCount > 0 &&
+        format is AndroidLogcatFormat;
+    final exported = canStreamArchive
+        ? null
+        : format.export(logs, device: device);
+    final suggestedFileName =
+        exported?.suggestedFileName ??
+        'logcat_export_${DateTime.now().millisecondsSinceEpoch}.json';
 
     final result = await FilePicker.platform.saveFile(
       dialogTitle: '导出日志',
-      fileName: exported.suggestedFileName,
+      fileName: suggestedFileName,
       allowedExtensions: format.id.fileExtensions,
       initialDirectory: initialDirectory,
       type: FileType.custom,
@@ -100,7 +117,11 @@ class LogFileService {
     final fileName = extractFileName(result);
 
     try {
-      await File(result).writeAsString(exported.content);
+      if (canStreamArchive) {
+        await archive.exportTo(File(result), device);
+      } else {
+        await File(result).writeAsString(exported!.content);
+      }
       await _rememberDialogDirectoryFromPath(result);
       return LogExportResult.success(fileName: fileName);
     } catch (e) {

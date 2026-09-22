@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 
 import '../../data/device.dart';
+import '../../services/preferences_service.dart';
 import '../../services/app_breadcrumbs.dart';
 import 'data/models/log_entry.dart';
 import 'data/models/log_filters.dart';
@@ -17,6 +18,7 @@ import 'data/models/log_tab_settings.dart';
 import 'presentation/models/log_view_mode.dart';
 import 'services/filter_utils.dart';
 import 'services/log_file_service.dart';
+import 'services/log_session_archive.dart';
 import 'services/log_signal_detector.dart';
 import 'services/search_utils.dart';
 import '../../session/device_session_controller.dart';
@@ -36,7 +38,16 @@ class LogController extends FeatureController {
   /// flushed as one batch rather than appending the next entry immediately:
   /// immediate appends notify and rebuild the viewer once per log line.
   @visibleForTesting
-  static int maxPendingLogs = 10000;
+  static int maxPendingLogs = 1000;
+
+  /// Hard ceiling for parsed log text retained by one tab. The full session is
+  /// archived to disk, so this only controls the interactive recent window.
+  @visibleForTesting
+  static int maxLogsMemoryBytes = 64 * 1024 * 1024;
+
+  /// Maximum number of queued entries moved into the viewer in one update.
+  @visibleForTesting
+  static int maxLogsPerFlush = 1000;
 
   /// Number of automatic recovery cycles attempted before the warning banner
   /// is surfaced for manual intervention.
@@ -59,6 +70,8 @@ class LogController extends FeatureController {
     : _settings = initialSettings,
       _logsBuffer = LogBuffer<LogEntry>(
         baseCapacity: initialSettings.logLinesLimit,
+        maxBytes: maxLogsMemoryBytes,
+        sizeOf: estimateLogEntryBytes,
       ) {
     final initialState = LogFilters.empty(selectedLogLevel);
     final suggestions = LogFilterSuggestions(
@@ -81,7 +94,6 @@ class LogController extends FeatureController {
       onStateChanged: (state) => _applyFilterState(state, source: inlineFilter),
       isIos: isIosLogContext,
     );
-    _syncLogBufferFilter();
   }
 
   /// Creates a controller pre-loaded with [entries] from a log file.
@@ -112,6 +124,8 @@ class LogController extends FeatureController {
   late final InlineFilterController inlineFilter;
 
   LogBuffer<LogEntry> _logsBuffer;
+  LogSessionArchive? _archive;
+  String? _archiveCreationError;
   final List<LogEntry> _pendingLogs = [];
   final List<LogIssue> _issues = [];
   final LogSignalDetector _signalDetector = const LogSignalDetector();
@@ -363,6 +377,7 @@ class LogController extends FeatureController {
     _pendingLogsMemoryBytes = 0;
     _issues.clear();
     _pendingJumpFilteredIndex = null;
+    _archive?.clear();
     _notify();
   }
 
@@ -400,7 +415,13 @@ class LogController extends FeatureController {
   }
 
   Future<LogExportResult> exportLogs() async {
-    return LogFileService.exportLogs(logs, device);
+    final archiveCreationError = _archiveCreationError;
+    if (archiveCreationError != null) {
+      return LogExportResult.failure(
+        error: '完整日志归档不可用：$archiveCreationError。请重新开始日志后再导出。',
+      );
+    }
+    return LogFileService.exportLogs(logs, device, archive: _archive);
   }
 
   void scrollToEnd() {
@@ -608,7 +629,6 @@ class LogController extends FeatureController {
     inlineFilter.updateState(cleared);
     _settings = _settings.copyWith(selectedLogLevel: defaultLevel);
     _appliedFilters = cleared;
-    _syncLogBufferFilter();
     _invalidateFilteredLogs();
     focusFilterInputs();
     _notify();
@@ -681,7 +701,7 @@ class LogController extends FeatureController {
   }
 
   bool submitLogLinesLimit(int value) {
-    if (value < 1000) {
+    if (value < 1000 || value > PreferencesService.maxLogLinesLimit) {
       _editingLogLinesLimit = false;
       _notify();
       return false;
@@ -928,7 +948,6 @@ class LogController extends FeatureController {
     _filterSaveDebounceTimer = Timer(const Duration(milliseconds: 1000), () {
       _recentFilters.rememberFrom(configuration);
     });
-    _syncLogBufferFilter();
     _invalidateFilteredLogs();
     _notify();
   }
@@ -950,19 +969,12 @@ class LogController extends FeatureController {
     );
   }
 
-  bool get _hasActiveRetentionFilter =>
-      _appliedFilters.hasActiveRetentionFilter(isIosLogContext);
-
-  LogFilter<LogEntry>? get _retentionFilter =>
-      _hasActiveRetentionFilter ? _matchesLogFilters : null;
-
-  void _syncLogBufferFilter() {
-    _logsBuffer.setFilter(_retentionFilter);
-  }
-
   void _replaceStoredLogs(Iterable<LogEntry> entries) {
-    final nextBuffer = LogBuffer<LogEntry>(baseCapacity: logLinesLimit);
-    nextBuffer.setFilter(_retentionFilter);
+    final nextBuffer = LogBuffer<LogEntry>(
+      baseCapacity: logLinesLimit,
+      maxBytes: maxLogsMemoryBytes,
+      sizeOf: estimateLogEntryBytes,
+    );
     _issues.clear();
     for (final entry in entries) {
       nextBuffer.append(entry);
@@ -1032,6 +1044,7 @@ class LogController extends FeatureController {
   }
 
   void _appendImmediateLogEntry(LogEntry entry) {
+    _archive?.append(entry);
     final evictedLogs = _logsBuffer.append(entry);
     final addedBytes = estimateLogEntryBytes(entry);
     final evictedBytes = estimateLogsBytes(evictedLogs);
@@ -1082,6 +1095,9 @@ class LogController extends FeatureController {
     await _stopLogcatInternal(resetState: false);
     if (_disposed) return;
 
+    await _resetArchive();
+    if (_disposed) return;
+
     clearSelectedRows(notify: false);
     _clearStoredLogs();
     _pendingLogs.clear();
@@ -1117,6 +1133,7 @@ class LogController extends FeatureController {
           return;
         }
         if (logcatState == LogcatState.paused) return;
+        _archive?.append(logEntry);
         if (_pendingLogs.length >= maxPendingLogs) {
           // High-volume streams can fill this queue before the periodic
           // flush. Flush the whole queue once, rather than falling back to an
@@ -1149,10 +1166,11 @@ class LogController extends FeatureController {
   void _flushPendingLogs() {
     if (_disposed || _pendingLogs.isEmpty) return;
 
-    final pendingLogs = List<LogEntry>.of(_pendingLogs);
-    final pendingLogsMemoryBytes = _pendingLogsMemoryBytes;
-    _pendingLogs.clear();
-    _pendingLogsMemoryBytes = 0;
+    final flushCount = math.min(maxLogsPerFlush, _pendingLogs.length);
+    final pendingLogs = _pendingLogs.sublist(0, flushCount);
+    _pendingLogs.removeRange(0, flushCount);
+    final pendingLogsMemoryBytes = estimateLogsBytes(pendingLogs);
+    _pendingLogsMemoryBytes -= pendingLogsMemoryBytes;
 
     var evictedMemoryBytes = 0;
     var didEvictStoredLogs = false;
@@ -1176,6 +1194,7 @@ class LogController extends FeatureController {
     }
 
     _invalidateSearchMatches();
+    unawaited(_archive?.flush());
     _notify();
 
     if (autoScroll && scrollController.hasClients) {
@@ -1575,10 +1594,30 @@ class LogController extends FeatureController {
     unawaited(_logSub?.cancel());
     _pendingLogs.clear();
     _pendingLogsMemoryBytes = 0;
+    unawaited(_archive?.dispose());
+    _archive = null;
     scrollController.dispose();
     classicFilter.dispose();
     inlineFilter.dispose();
     super.dispose();
+  }
+
+  Future<void> _resetArchive() async {
+    final previous = _archive;
+    _archive = null;
+    _archiveCreationError = null;
+    if (previous != null) await previous.dispose();
+    if (_disposed) return;
+    try {
+      final archive = await LogSessionArchive.create();
+      if (_disposed) {
+        await archive.dispose();
+        return;
+      }
+      _archive = archive;
+    } catch (error) {
+      _archiveCreationError = error.toString();
+    }
   }
 }
 
@@ -1601,17 +1640,4 @@ extension on LogFilters {
 
   static String _termSignatures(List<FilterTerm> terms) =>
       terms.map((term) => term.signature).join('\u0001');
-
-  bool hasActiveRetentionFilter(bool isIosLogContext) {
-    final defaultLevel = LogLevel.defaultSelectionForPlatform(
-      isIos: isIosLogContext,
-    );
-    return level.hierarchy < defaultLevel.hierarchy ||
-        messageTerms.isNotEmpty ||
-        rawTerms.isNotEmpty ||
-        packageTerms.isNotEmpty ||
-        pidTidTerms.isNotEmpty ||
-        tagTerms.isNotEmpty ||
-        maxAge != null;
-  }
 }

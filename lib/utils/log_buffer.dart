@@ -1,48 +1,25 @@
 import 'dart:collection';
 
-typedef LogFilter<T> = bool Function(T log);
-
-const int _batchOverflowPercent = 20;
-
 class LogBuffer<T> {
-  LogBuffer({required this.baseCapacity})
-    : assert(baseCapacity > 0, 'baseCapacity must be positive'),
-      expandedCapacity = baseCapacity * 2,
-      _targetCapacity = baseCapacity;
+  LogBuffer({
+    required this.baseCapacity,
+    this.maxBytes,
+    int Function(T value)? sizeOf,
+  }) : assert(baseCapacity > 0, 'baseCapacity must be positive'),
+       assert(maxBytes == null || maxBytes > 0, 'maxBytes must be positive'),
+       _sizeOf = sizeOf ?? _zeroSize;
 
   final int baseCapacity;
-  final int expandedCapacity;
+  final int? maxBytes;
+  final int Function(T value) _sizeOf;
   final ListQueue<_BufferEntry<T>> _entries = ListQueue<_BufferEntry<T>>();
+  int _bytes = 0;
 
-  LogFilter<T>? _activeFilter;
-
-  /// Current target capacity:
-  /// baseCapacity normally
-  /// expandedCapacity when filter active
-  int _targetCapacity;
-
-  void setFilter(LogFilter<T>? filter) {
-    _activeFilter = filter;
-
-    for (final entry in _entries) {
-      entry.matchesFilter = filter?.call(entry.value) ?? false;
-    }
-
-    if (filter == null) {
-      _targetCapacity = baseCapacity;
-    } else {
-      _targetCapacity = expandedCapacity;
-    }
-
-    _evictOverflowBatch();
-  }
-
-  List<T> append(T log) {
-    final matches = _activeFilter?.call(log) ?? false;
-
-    _entries.addLast(_BufferEntry<T>(value: log, matchesFilter: matches));
-
-    return _evictOverflowBatch();
+  List<T> append(T value) {
+    final bytes = _sizeOf(value);
+    _entries.addLast(_BufferEntry(value, bytes));
+    _bytes += bytes;
+    return _trim();
   }
 
   List<T> getLogs() {
@@ -57,82 +34,41 @@ class LogBuffer<T> {
   }
 
   int get size => _entries.length;
+  int get bytes => _bytes;
+  int get capacity => baseCapacity;
+  int get maxBufferedSize => baseCapacity;
 
-  bool get isFilterActive => _activeFilter != null;
-
-  int get capacity => _targetCapacity;
-
-  int get maxBufferedSize => _targetCapacity + _overflowAllowance;
-
-  List<T> trimToCapacity() {
-    return _evictUntilSize(_targetCapacity);
-  }
+  List<T> trimToCapacity() => _trim();
 
   void clear() {
     _entries.clear();
+    _bytes = 0;
   }
 
-  Map<String, dynamic> stats() {
-    final matchingCount = _entries.where((entry) => entry.matchesFilter).length;
-    return {
-      'size': size,
-      'baseCapacity': baseCapacity,
-      'expandedCapacity': expandedCapacity,
-      'targetCapacity': _targetCapacity,
-      'maxBufferedSize': maxBufferedSize,
-      'overflowPercent': _batchOverflowPercent,
-      'filterActive': isFilterActive,
-      'matchingCount': matchingCount,
-      'nonMatchingCount': size - matchingCount,
-      'shrinkDebt': 0,
-    };
-  }
+  Map<String, dynamic> stats() => {
+    'size': size,
+    'bytes': bytes,
+    'baseCapacity': baseCapacity,
+    'maxBytes': maxBytes,
+  };
 
-  int get _overflowAllowance {
-    final allowance = (_targetCapacity * _batchOverflowPercent) ~/ 100;
-    return allowance > 0 ? allowance : 1;
-  }
-
-  List<T> _evictOverflowBatch() {
-    if (size <= maxBufferedSize) {
-      return const [];
-    }
-
-    return _evictUntilSize(_targetCapacity);
-  }
-
-  List<T> _evictUntilSize(int targetSize) {
+  List<T> _trim() {
     final evicted = <T>[];
-    final removeCount = size - targetSize;
-    for (var index = 0; index < removeCount; index++) {
-      final removed = _evictOne(preferNonMatching: _activeFilter != null);
-      if (removed == null) {
-        break;
-      }
-      evicted.add(removed);
+    while (_entries.length > baseCapacity ||
+        (maxBytes != null && _bytes > maxBytes! && _entries.length > 1)) {
+      final removed = _entries.removeFirst();
+      _bytes -= removed.bytes;
+      evicted.add(removed.value);
     }
     return evicted;
   }
 
-  T? _evictOne({required bool preferNonMatching}) {
-    if (_entries.isEmpty) return null;
-
-    if (preferNonMatching) {
-      for (final entry in _entries) {
-        if (!entry.matchesFilter) {
-          _entries.remove(entry);
-          return entry.value;
-        }
-      }
-    }
-
-    return _entries.removeFirst().value;
-  }
+  static int _zeroSize(Object? _) => 0;
 }
 
 class _BufferEntry<T> {
-  final T value;
-  bool matchesFilter;
+  const _BufferEntry(this.value, this.bytes);
 
-  _BufferEntry({required this.value, required this.matchesFilter});
+  final T value;
+  final int bytes;
 }

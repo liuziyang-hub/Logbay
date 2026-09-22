@@ -1,5 +1,6 @@
 import 'package:eagly/features/logs/data/models/log_column.dart';
 import 'package:eagly/features/logs/presentation/components/log_viewer.dart';
+import 'package:eagly/features/logs/presentation/components/log_row.dart';
 import 'package:eagly/presentation/theme/app_theme.dart';
 import 'package:eagly/services/preferences_service.dart';
 import 'package:eagly/utils/text_search_pattern.dart';
@@ -128,5 +129,36 @@ void main() {
 
     expect(tester.takeException(), isNull);
     expect(saveCount, 0);
+  });
+
+  testWidgets('large buffers only build visible log rows', (tester) async {
+    final scrollController = ScrollController();
+    addTearDown(scrollController.dispose);
+    final logs = List.generate(
+      50000,
+      (index) => testLogEntry(message: 'Message $index'),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.lightTheme,
+        home: Scaffold(
+          body: SizedBox(
+            width: 1000,
+            height: 700,
+            child: LogViewer(
+              logs: logs,
+              scrollController: scrollController,
+              wrapText: false,
+              hiddenColumns: const {},
+              columnWidths: const {},
+              isIos: false,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byType(LogRow).evaluate().length, lessThan(100));
   });
 }

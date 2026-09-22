@@ -153,6 +153,5 @@ int estimateLogEntryBytes(LogEntry log) {
       stringBytes(log.level) +
       stringBytes(log.tag) +
       stringBytes(log.message) +
-      stringBytes(log.lowercaseSearchable) +
       (log.packageName == null ? 0 : stringBytes(log.packageName!));
 }

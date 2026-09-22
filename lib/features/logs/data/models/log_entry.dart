@@ -61,31 +61,13 @@ class LogEntry {
   }) : id = id ?? LogEntryIdGenerator.instance.next(),
        _referenceTime = now;
 
-  /// Lowercased concatenation of all searchable fields, used by raw-term
-  /// filtering. Computed once on first access (after [packageName] /
-  /// [processName] are resolved post-construction) and cached — recomputing it
-  /// per filter pass over a 50k-entry buffer is what made long sessions crawl.
-  late final String lowercaseSearchable = [
-    timestamp,
-    pid,
-    tid,
-    level,
-    tag,
-    message,
-    if (packageName != null && packageName!.trim().isNotEmpty) packageName,
-    if (processName != null && processName!.trim().isNotEmpty) processName,
-    if (subsystem != null && subsystem!.trim().isNotEmpty) subsystem,
-    if (category != null && category!.trim().isNotEmpty) category,
-  ].join(' ').toLowerCase();
-
   /// [timestamp] parsed into a local [DateTime], or null when the format
   /// isn't recognised. Dispatches on [platform]: iOS syslog timestamps are
   /// always normalised to the full `YYYY-MM-DD HH:MM:SS.mmm` form before
   /// reaching [LogEntry], while Android logcat's `MM-DD HH:MM:SS.mmm` form
   /// carries no year — inferred from [now] (the wall clock at first access
   /// if not supplied), stepping back a year for a date that would otherwise
-  /// sit in the future across a Dec→Jan boundary. Computed once on first
-  /// access and cached, same rationale as [lowercaseSearchable].
+  /// sit in the future across a Dec→Jan boundary.
   late final DateTime? parsedTimestamp = _parseTimestamp();
 
   DateTime? _parseTimestamp() {

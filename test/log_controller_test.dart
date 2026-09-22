@@ -71,7 +71,9 @@ void main() {
     await PreferencesService.init();
     // Keep automatic recovery fast and deterministic in tests.
     LogController.recoveryBackoff = const Duration(milliseconds: 10);
-    LogController.maxPendingLogs = 10000;
+    LogController.maxPendingLogs = 1000;
+    LogController.maxLogsPerFlush = 1000;
+    LogController.maxLogsMemoryBytes = 64 * 1024 * 1024;
     clipboardText = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(SystemChannels.platform, (methodCall) async {
@@ -97,7 +99,9 @@ void main() {
     LogController.recoveryBackoff = const Duration(seconds: 2);
     LogController.watchdogInterval = const Duration(seconds: 10);
     LogController.streamStallThreshold = const Duration(seconds: 30);
-    LogController.maxPendingLogs = 10000;
+    LogController.maxPendingLogs = 1000;
+    LogController.maxLogsPerFlush = 1000;
+    LogController.maxLogsMemoryBytes = 64 * 1024 * 1024;
   });
 
   test('activate starts log capture once for a connected device', () async {
@@ -607,7 +611,7 @@ void main() {
   });
 
   test(
-    'streamed logs retain filtered matches longer while a filter is active',
+    'streamed logs retain the newest window while a filter is active',
     () async {
       final log = createLog(settings: testSettings(logLinesLimit: 3));
 
@@ -639,18 +643,15 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 400));
 
       final storedMessages = log.logs.map((entry) => entry.message).toList();
-      expect(storedMessages, containsAll(['keep 1', 'keep 2']));
-      expect(storedMessages, isNot(contains('drop 1')));
-      expect(log.filteredLogs.map((entry) => entry.message), [
-        'keep 1',
-        'keep 2',
-      ]);
+      expect(storedMessages, ['drop 4', 'drop 5', 'drop 6']);
+      expect(log.filteredLogs, isEmpty);
     },
   );
 
   test('full pending queue flushes as a batch during a burst', () async {
     final log = createLog();
     LogController.maxPendingLogs = 2;
+    LogController.maxLogsPerFlush = 2;
 
     await log.startLogcat();
     service.emit(testLogEntry(message: 'one'));

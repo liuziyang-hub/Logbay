@@ -66,7 +66,8 @@ class PreferencesService {
   static const _maxRecentLogFiles = 10;
 
   /// Default value for [logLinesLimit] when no preference has been saved.
-  static const defaultLogLinesLimit = 100000;
+  static const defaultLogLinesLimit = 50000;
+  static const maxLogLinesLimit = 50000;
 
   // --- Home page preferences ---
 
@@ -90,8 +91,11 @@ class PreferencesService {
   static set filterViewMode(LogFilterViewMode v) =>
       _prefs.setString(_keyFilterViewMode, v.name);
 
-  static int get logLinesLimit =>
-      _prefs.getInt(_keyLogLinesLimit) ?? defaultLogLinesLimit;
+  static int get logLinesLimit {
+    final stored = _prefs.getInt(_keyLogLinesLimit) ?? defaultLogLinesLimit;
+    return stored > maxLogLinesLimit ? maxLogLinesLimit : stored;
+  }
+
   static set logLinesLimit(int v) => _prefs.setInt(_keyLogLinesLimit, v);
 
   static ThemeMode get themeMode =>

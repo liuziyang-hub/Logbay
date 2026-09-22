@@ -44,6 +44,15 @@ void main() {
     expect(prefs.getString('filterViewMode'), LogFilterViewMode.inline.name);
   });
 
+  test('caps legacy log line preferences at the safe maximum', () {
+    PreferencesService.logLinesLimit = 100000;
+
+    expect(
+      PreferencesService.logLinesLimit,
+      PreferencesService.maxLogLinesLimit,
+    );
+  });
+
   group('recent log files', () {
     test('defaults to empty and seeds the listenable', () {
       expect(PreferencesService.recentLogFiles, isEmpty);

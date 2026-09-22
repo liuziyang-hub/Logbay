@@ -23,6 +23,8 @@ class FilterTerm {
   final FilterMatchMode mode;
   final bool negate;
 
+  late final String _lowercaseValue = value.toLowerCase();
+
   /// Compiled form of a [FilterMatchMode.regex] [value]; null for other modes,
   /// an empty value, or a pattern that fails to compile. Built once, lazily.
   late final RegExp? _regExp = mode == FilterMatchMode.regex
@@ -47,9 +49,9 @@ class FilterTerm {
 
   bool _rawMatches(String candidate) => switch (mode) {
     FilterMatchMode.contains => candidate.toLowerCase().contains(
-      value.toLowerCase(),
+      _lowercaseValue,
     ),
-    FilterMatchMode.exact => candidate.toLowerCase() == value.toLowerCase(),
+    FilterMatchMode.exact => candidate.toLowerCase() == _lowercaseValue,
     FilterMatchMode.regex => _regExp?.hasMatch(candidate) ?? false,
   };
 

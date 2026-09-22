@@ -1227,6 +1227,7 @@ class _LogViewerState extends State<LogViewer> {
     return SuperListView.builder(
       controller: widget.scrollController,
       listController: _listController,
+      addAutomaticKeepAlives: false,
       itemCount: widget.logs.length,
       itemBuilder: (_, i) {
         final log = widget.logs[i];
