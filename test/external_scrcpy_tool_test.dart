@@ -16,6 +16,8 @@ void main() {
 
     expect(arguments, contains('--serial=emulator-5554'));
     expect(arguments, contains('--no-audio'));
+    expect(arguments, contains('--window-borderless'));
+    expect(arguments, contains('--window-x=-32000'));
     expect(arguments, contains('--max-size=1280'));
     expect(arguments, contains('--max-fps=60'));
     expect(arguments, contains('--video-bit-rate=8000000'));

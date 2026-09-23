@@ -5,6 +5,7 @@ import 'package:gap/gap.dart';
 import '../../flutter_scrcpy/flutter_scrcpy.dart';
 import '../mirror_controller.dart';
 import 'ios_mirror_webview.dart';
+import 'embedded_scrcpy_view.dart';
 
 class PaneBody extends StatelessWidget {
   const PaneBody({super.key, required this.controller});
@@ -16,6 +17,11 @@ class PaneBody extends StatelessWidget {
     final theme = Theme.of(context);
     final device = controller.device;
     final session = controller.screenMirrorSession;
+
+    final processId = controller.externalMirrorProcessId;
+    if (processId != null && controller.isScreenMirrorRunning) {
+      return EmbeddedScrcpyView(key: ValueKey(processId), processId: processId);
+    }
 
     // Android: live texture once the mirror is running.
     if (session != null && controller.isScreenMirrorRunning) {

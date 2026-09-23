@@ -6,11 +6,13 @@ import '../../features/flutter_scrcpy/flutter_scrcpy.dart';
 
 class ExternalScrcpySession {
   ExternalScrcpySession({
+    this.processId,
     required this.exitCode,
     required Future<void> Function() onStop,
   }) : _onStop = onStop;
 
   final Future<int> exitCode;
+  final int? processId;
   final Future<void> Function() _onStop;
   bool _stopped = false;
 
@@ -38,6 +40,9 @@ class ExternalScrcpyTool {
     '--serial=$serial',
     '--no-audio',
     '--window-title=Logbay 兼容镜像',
+    '--window-borderless',
+    '--window-x=-32000',
+    '--window-y=-32000',
     if (options.maxSize != null) '--max-size=${options.maxSize}',
     if (options.maxFps != null) '--max-fps=${options.maxFps}',
     if (options.videoBitRate != null)
@@ -72,6 +77,7 @@ class ExternalScrcpyTool {
       );
     }
     return ExternalScrcpySession(
+      processId: process.pid,
       exitCode: process.exitCode,
       onStop: () async {
         process.kill();

@@ -123,6 +123,7 @@ class MirrorController extends FeatureController {
   ScrcpyMirrorSession? get screenMirrorSession => _session;
 
   bool get isExternalAndroidMirror => _externalAndroidSession != null;
+  int? get externalMirrorProcessId => _externalAndroidSession?.processId;
 
   /// iOS serve-web session (in-pane WebView on Windows), if running.
   IosMirrorSession? get iosMirrorSession => _iosSession;

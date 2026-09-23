@@ -118,13 +118,13 @@ class ScrcpyVideoPlugin : public flutter::Plugin {
  public:
   static void RegisterWithRegistrar(flutter::PluginRegistrarWindows* registrar) {
     auto plugin = std::make_unique<ScrcpyVideoPlugin>(registrar->messenger(),
-                                                      registrar->texture_registrar());
+        registrar->texture_registrar(), registrar->GetView()->GetNativeWindow());
     registrar->AddPlugin(std::move(plugin));
   }
 
   ScrcpyVideoPlugin(flutter::BinaryMessenger* messenger,
-                    flutter::TextureRegistrar* textures)
-      : textures_(textures) {
+                    flutter::TextureRegistrar* textures, HWND view)
+      : textures_(textures), view_(view) {
     method_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
         messenger, "flutter_scrcpy/video", &flutter::StandardMethodCodec::GetInstance());
     method_channel_->SetMethodCallHandler(
@@ -143,10 +143,102 @@ class ScrcpyVideoPlugin : public flutter::Plugin {
   ~ScrcpyVideoPlugin() override = default;
 
  private:
+  struct WindowSearch {
+    DWORD pid;
+    HWND window = nullptr;
+  };
+
+  static BOOL CALLBACK FindMirrorWindow(HWND window, LPARAM parameter) {
+    auto* search = reinterpret_cast<WindowSearch*>(parameter);
+    DWORD pid = 0;
+    GetWindowThreadProcessId(window, &pid);
+    wchar_t name[64]{};
+    GetClassNameW(window, name, 64);
+    if (pid == search->pid && wcscmp(name, L"SDL_app") == 0) {
+      search->window = window;
+      return FALSE;
+    }
+    return TRUE;
+  }
+
+  void UpdateEmbeddedWindow(
+      const flutter::MethodCall<flutter::EncodableValue>& call,
+      std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+    const auto* args = std::get_if<flutter::EncodableMap>(call.arguments());
+    auto number = [args](const char* key) -> int {
+      if (!args) return 0;
+      const auto it = args->find(flutter::EncodableValue(key));
+      if (it == args->end()) return 0;
+      if (const auto* value = std::get_if<int32_t>(&it->second)) return *value;
+      return 0;
+    };
+    const DWORD pid = static_cast<DWORD>(number("pid"));
+    if (pid == 0) {
+      result->Error("bad_args", "Mirror process ID required");
+      return;
+    }
+    HWND window = embedded_windows_[pid];
+    DWORD owner = 0;
+    if (IsWindow(window)) GetWindowThreadProcessId(window, &owner);
+    if (owner != pid) window = nullptr;
+    if (call.method_name() == "hideEmbedded") {
+      if (window) ShowWindowAsync(window, SW_HIDE);
+      result->Success();
+      return;
+    }
+    if (!window) {
+      WindowSearch search{pid};
+      EnumWindows(FindMirrorWindow, reinterpret_cast<LPARAM>(&search));
+      window = search.window;
+      if (!window) {
+        embedded_windows_.erase(pid);
+        result->Success(flutter::EncodableValue(false));
+        return;
+      }
+      // Refuse a DPI mismatch instead of forcing a cross-process DPI reset.
+      if (!AreDpiAwarenessContextsEqual(GetWindowDpiAwarenessContext(window),
+                                       GetWindowDpiAwarenessContext(view_))) {
+        ShowWindowAsync(window, SW_HIDE);
+        result->Error("mirror_dpi_mismatch", "镜像窗口与主窗口的缩放模式不兼容。");
+        return;
+      }
+      ShowWindow(window, SW_HIDE);
+      const auto style = GetWindowLongPtr(window, GWL_STYLE);
+      SetWindowLongPtr(window, GWL_STYLE,
+          (style & ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME)) | WS_CHILD);
+      SetLastError(0);
+      const HWND previous = SetParent(window, view_);
+      if (!previous && GetLastError() != 0) {
+        SetWindowLongPtr(window, GWL_STYLE, style);
+        result->Error("mirror_embed_failed", "无法将镜像嵌入当前窗口。");
+        return;
+      }
+      embedded_windows_[pid] = window;
+    }
+    // SDL can resize its own window on phone rotation. Reconcile the native
+    // bounds even when Flutter's layout has not changed, without repainting
+    // an already-correct window every timer tick.
+    RECT bounds{};
+    GetWindowRect(window, &bounds);
+    MapWindowPoints(HWND_DESKTOP, view_, reinterpret_cast<POINT*>(&bounds), 2);
+    if (bounds.left != number("x") || bounds.top != number("y") ||
+        bounds.right - bounds.left != number("width") ||
+        bounds.bottom - bounds.top != number("height")) {
+      SetWindowPos(window, HWND_TOP, number("x"), number("y"),
+                   number("width"), number("height"),
+                   SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_ASYNCWINDOWPOS);
+    }
+    if (!IsWindowVisible(window)) ShowWindowAsync(window, SW_SHOWNOACTIVATE);
+    result->Success(flutter::EncodableValue(true));
+  }
+
   void HandleMethodCall(
       const flutter::MethodCall<flutter::EncodableValue>& call,
       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
-    if (call.method_name() == "create") {
+    if (call.method_name() == "updateEmbedded" ||
+        call.method_name() == "hideEmbedded") {
+      UpdateEmbeddedWindow(call, std::move(result));
+    } else if (call.method_name() == "create") {
       auto session = std::make_shared<WinTextureSession>();
       if (!session->Init(textures_)) {
         result->Error("texture_register_failed",
@@ -208,6 +300,8 @@ class ScrcpyVideoPlugin : public flutter::Plugin {
   }
 
   flutter::TextureRegistrar* textures_;
+  HWND view_;
+  std::map<DWORD, HWND> embedded_windows_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> method_channel_;
   std::mutex sessions_mutex_;
   std::map<int64_t, std::shared_ptr<WinTextureSession>> sessions_;
