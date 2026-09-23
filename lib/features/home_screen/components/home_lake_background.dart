@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../../constants/atmosphere_theme.dart';
 import '../../../services/preferences_service.dart';
+import '../../../services/windows_display_compatibility.dart';
 
 /// Full-bleed muted looping landing video for the selected atmosphere theme.
 ///
@@ -22,6 +23,8 @@ class HomeLakeBackground extends StatefulWidget {
 }
 
 class _HomeLakeBackgroundState extends State<HomeLakeBackground> {
+  final bool _safeGraphicsMode =
+      WindowsDisplayCompatibility.requiresSafeGraphicsMode;
   late final Player _player = Player(
     configuration: const PlayerConfiguration(
       muted: true,
@@ -32,9 +35,12 @@ class _HomeLakeBackgroundState extends State<HomeLakeBackground> {
   );
   late final VideoController _controller = VideoController(
     _player,
-    configuration: const VideoControllerConfiguration(
-      enableHardwareAcceleration: true,
-      hwdec: 'auto',
+    configuration: VideoControllerConfiguration(
+      // On Windows the landing video and the mirror both register native
+      // textures. Software decoding keeps the decorative background away from
+      // ANGLE/D3D while the mirror texture is created or torn down.
+      enableHardwareAcceleration: !Platform.isWindows,
+      hwdec: Platform.isWindows ? 'no' : 'auto',
     ),
   );
 
@@ -49,7 +55,10 @@ class _HomeLakeBackgroundState extends State<HomeLakeBackground> {
   void initState() {
     super.initState();
     _atmosphere = PreferencesService.atmosphereTheme;
-    PreferencesService.atmosphereThemeListenable.addListener(_onAtmosphereChanged);
+    if (_safeGraphicsMode) return;
+    PreferencesService.atmosphereThemeListenable.addListener(
+      _onAtmosphereChanged,
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_start(_atmosphere));
     });
@@ -147,18 +156,22 @@ class _HomeLakeBackgroundState extends State<HomeLakeBackground> {
         unawaited(s.cancel());
       }
       _subs.clear();
-      _subs.add(_player.stream.completed.listen((done) {
-        if (done) unawaited(_restartFromStart());
-      }));
-      _subs.add(_player.stream.playing.listen((playing) {
-        if (!playing &&
-            !_restarting &&
-            _player.state.duration > Duration.zero &&
-            _player.state.position >=
-                _player.state.duration - const Duration(milliseconds: 400)) {
-          unawaited(_restartFromStart());
-        }
-      }));
+      _subs.add(
+        _player.stream.completed.listen((done) {
+          if (done) unawaited(_restartFromStart());
+        }),
+      );
+      _subs.add(
+        _player.stream.playing.listen((playing) {
+          if (!playing &&
+              !_restarting &&
+              _player.state.duration > Duration.zero &&
+              _player.state.position >=
+                  _player.state.duration - const Duration(milliseconds: 400)) {
+            unawaited(_restartFromStart());
+          }
+        }),
+      );
     } catch (_) {
       // Solid canvas fallback.
     }
@@ -166,12 +179,15 @@ class _HomeLakeBackgroundState extends State<HomeLakeBackground> {
 
   @override
   void dispose() {
-    PreferencesService.atmosphereThemeListenable
-        .removeListener(_onAtmosphereChanged);
-    for (final s in _subs) {
-      unawaited(s.cancel());
+    if (!_safeGraphicsMode) {
+      PreferencesService.atmosphereThemeListenable.removeListener(
+        _onAtmosphereChanged,
+      );
+      for (final s in _subs) {
+        unawaited(s.cancel());
+      }
+      unawaited(_player.dispose());
     }
-    unawaited(_player.dispose());
     super.dispose();
   }
 

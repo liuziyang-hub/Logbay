@@ -85,15 +85,18 @@ class AppUpdateService {
     }
 
     if (Platform.isWindows) {
+      final tempDirectory = await getTemporaryDirectory();
+      final updaterScript = File(
+        '${tempDirectory.path}${Platform.pathSeparator}'
+        'logbay-updater-${DateTime.now().microsecondsSinceEpoch}.ps1',
+      );
+      await updaterScript.writeAsString(windowsUpdaterScript, flush: true);
       await Process.start('powershell.exe', [
-        '-NoProfile',
-        '-NonInteractive',
-        '-WindowStyle',
-        'Hidden',
-        '-Command',
-        windowsInstallerCommand,
-        '$pid',
-        installer.path,
+        ...windowsUpdaterArguments(
+          scriptPath: updaterScript.path,
+          appProcessId: pid,
+          installerPath: installer.path,
+        ),
       ], mode: ProcessStartMode.detached);
     } else {
       final opener = Platform.isMacOS ? 'open' : 'xdg-open';
@@ -111,19 +114,52 @@ class AppUpdateService {
     exit(0);
   }
 
-  /// PowerShell command used by the detached Windows updater.
+  /// One-shot PowerShell updater launched after the installer is downloaded.
   ///
-  /// The parameter declaration must end before the wait/install statements.
-  /// Wrapping those statements in `{ ... }` would only create a script-block
-  /// value and never execute the installer.
-  static String get windowsInstallerCommand =>
-      'param([int]\$appProcessId, [string]\$installerPath); '
-      'while (Get-Process -Id \$appProcessId '
-      '-ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 100 }; '
-      'Start-Process -FilePath \$installerPath -ArgumentList '
-      "'/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"
-      "'/CLOSEAPPLICATIONS','/FORCECLOSEAPPLICATIONS',"
-      "'/LANG=chinesesimplified'";
+  /// `-File` with named arguments is intentional: `powershell -Command` does
+  /// not reliably bind trailing arguments and splits installer paths containing
+  /// spaces, which previously left users at the manual-install step.
+  static const windowsUpdaterScript = r'''
+param(
+  [Parameter(Mandatory = $true)][int]$AppProcessId,
+  [Parameter(Mandatory = $true)][string]$InstallerPath
+)
+
+try {
+  while (Get-Process -Id $AppProcessId -ErrorAction SilentlyContinue) {
+    Start-Sleep -Milliseconds 100
+  }
+  Start-Process -FilePath $InstallerPath -ArgumentList @(
+    '/VERYSILENT',
+    '/SUPPRESSMSGBOXES',
+    '/NORESTART',
+    '/CLOSEAPPLICATIONS',
+    '/FORCECLOSEAPPLICATIONS',
+    '/LANG=chinesesimplified'
+  )
+} finally {
+  Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
+}
+''';
+
+  static List<String> windowsUpdaterArguments({
+    required String scriptPath,
+    required int appProcessId,
+    required String installerPath,
+  }) => [
+    '-NoProfile',
+    '-NonInteractive',
+    '-WindowStyle',
+    'Hidden',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-File',
+    scriptPath,
+    '-AppProcessId',
+    appProcessId.toString(),
+    '-InstallerPath',
+    installerPath,
+  ];
 
   static String _stripV(String tag) =>
       tag.startsWith('v') || tag.startsWith('V') ? tag.substring(1) : tag;

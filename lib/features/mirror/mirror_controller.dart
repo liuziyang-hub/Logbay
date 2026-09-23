@@ -9,6 +9,8 @@ import '../../data/device.dart';
 import '../../services/app_breadcrumbs.dart';
 import '../../services/device_session_repository.dart';
 import '../../services/tools/ios_mirror_tool.dart';
+import '../../services/tools/external_scrcpy_tool.dart';
+import '../../services/windows_display_compatibility.dart';
 import '../../session/feature_controller.dart';
 import '../../utils/utils.dart';
 import '../flutter_scrcpy/flutter_scrcpy.dart';
@@ -68,6 +70,7 @@ class MirrorController extends FeatureController {
   double paneWidth = 340;
 
   ScrcpyMirrorSession? _session;
+  ExternalScrcpySession? _externalAndroidSession;
   IosMirrorSession? _iosSession;
   ScreenRecordingSession? _recordingSession;
   bool _disposed = false;
@@ -118,6 +121,8 @@ class MirrorController extends FeatureController {
   static Duration iosHealthInterval = const Duration(seconds: 2);
 
   ScrcpyMirrorSession? get screenMirrorSession => _session;
+
+  bool get isExternalAndroidMirror => _externalAndroidSession != null;
 
   /// iOS serve-web session (in-pane WebView on Windows), if running.
   IosMirrorSession? get iosMirrorSession => _iosSession;
@@ -184,6 +189,26 @@ class MirrorController extends FeatureController {
     _notify();
 
     try {
+      if (WindowsDisplayCompatibility.requiresSafeGraphicsMode) {
+        final mirror = await service.startExternalScreenMirror(
+          options: mirrorQuality.toOptions(),
+        );
+        if (_disposed || generation != _startGeneration) {
+          await mirror.stop();
+          return;
+        }
+        _externalAndroidSession = mirror;
+        _sessionStartedAt = DateTime.now();
+        screenMirrorState = ScreenMirrorState.running;
+        AppBreadcrumbs.action(
+          'External compatibility mirror running for ${device.displayName}',
+          category: 'mirror',
+        );
+        _notify();
+        unawaited(_watchExternalAndroidExit(mirror));
+        return;
+      }
+
       final mirror = await service.startScreenMirror(
         options: mirrorQuality.toOptions(),
       );
@@ -405,6 +430,8 @@ class MirrorController extends FeatureController {
     _startGeneration++;
     final mirror = _session;
     _session = null;
+    final externalAndroid = _externalAndroidSession;
+    _externalAndroidSession = null;
     final ios = _iosSession;
     _iosSession = null;
     await _clipboardSub?.cancel();
@@ -414,6 +441,13 @@ class MirrorController extends FeatureController {
       await mirror.stop();
       AppBreadcrumbs.action(
         'Stopped screen mirror for ${device.displayName}',
+        category: 'mirror',
+      );
+    }
+    if (externalAndroid != null) {
+      await externalAndroid.stop();
+      AppBreadcrumbs.action(
+        'Stopped external compatibility mirror for ${device.displayName}',
         category: 'mirror',
       );
     }
@@ -479,6 +513,19 @@ class MirrorController extends FeatureController {
         ? ScreenMirrorState.stopped
         : ScreenMirrorState.error;
     screenMirrorError = exitCode == 0 ? null : '屏幕镜像已停止（退出码 $exitCode）。';
+    _notify();
+  }
+
+  Future<void> _watchExternalAndroidExit(ExternalScrcpySession mirror) async {
+    final exitCode = await mirror.exitCode;
+    if (_disposed || !identical(_externalAndroidSession, mirror)) return;
+    _externalAndroidSession = null;
+    screenMirrorState = exitCode == 0
+        ? ScreenMirrorState.stopped
+        : ScreenMirrorState.error;
+    screenMirrorError = exitCode == 0
+        ? null
+        : '兼容镜像已停止（退出码 $exitCode）。请检查 USB 连接后重试。';
     _notify();
   }
 

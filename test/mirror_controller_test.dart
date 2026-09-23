@@ -1,6 +1,7 @@
 import 'package:eagly/data/device.dart';
 import 'package:eagly/features/mirror/mirror_controller.dart';
 import 'package:eagly/services/preferences_service.dart';
+import 'package:eagly/services/windows_display_compatibility.dart';
 import 'package:eagly/session/device_session_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -20,6 +21,7 @@ void main() {
   });
 
   setUp(() {
+    WindowsDisplayCompatibility.safeGraphicsModeOverride = false;
     MirrorController.iosRestartBackoff = const [
       Duration.zero,
       Duration.zero,
@@ -47,6 +49,7 @@ void main() {
   tearDown(() {
     session?.dispose();
     session = null;
+    WindowsDisplayCompatibility.safeGraphicsModeOverride = null;
   });
 
   tearDownAll(() {
@@ -67,6 +70,21 @@ void main() {
     expect(mirror.screenMirrorState, ScreenMirrorState.running);
     expect(mirror.isScreenMirrorRunning, isTrue);
     expect(service.startedMirrorCount, 1);
+  });
+
+  test('virtual display mode opens the crash-isolated scrcpy client', () async {
+    WindowsDisplayCompatibility.safeGraphicsModeOverride = true;
+    final mirror = createMirror();
+
+    await mirror.start();
+
+    expect(mirror.screenMirrorState, ScreenMirrorState.running);
+    expect(mirror.isExternalAndroidMirror, isTrue);
+    expect(service.startedExternalMirrorCount, 1);
+    expect(service.startedMirrorCount, 0);
+
+    await mirror.stop();
+    expect(service.stoppedExternalMirrorCount, 1);
   });
 
   test('mirror starts for a connected iOS device', () async {

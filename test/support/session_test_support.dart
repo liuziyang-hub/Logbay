@@ -17,6 +17,7 @@ import 'package:eagly/features/wireless_connection/data/wireless_debug_models.da
 import 'package:eagly/features/flutter_scrcpy/flutter_scrcpy.dart';
 import 'package:eagly/services/device_session_repository.dart';
 import 'package:eagly/services/tools/adb_tool.dart';
+import 'package:eagly/services/tools/external_scrcpy_tool.dart';
 import 'package:eagly/services/tools/idevice_id_tool.dart';
 import 'package:eagly/services/tools/idevice_info_tool.dart';
 import 'package:eagly/services/tools/ios_mirror_tool.dart';
@@ -74,10 +75,12 @@ class FakeSessionService extends DeviceSessionRepository {
 
   int startLogStreamCount = 0;
   int startedMirrorCount = 0;
+  int startedExternalMirrorCount = 0;
   int startedIosMirrorCount = 0;
   Completer<int>? iosMirrorExit;
   Object? iosMirrorStartError;
   int stoppedMirrorCount = 0;
+  int stoppedExternalMirrorCount = 0;
   int captureScreenshotCount = 0;
   Uint8List screenshotToReturn = Uint8List.fromList(const [1, 2, 3]);
   Object? screenshotError;
@@ -158,6 +161,21 @@ class FakeSessionService extends DeviceSessionRepository {
         if (!exitCode.isCompleted) {
           exitCode.complete(0);
         }
+      },
+    );
+  }
+
+  @override
+  Future<ExternalScrcpySession> startExternalScreenMirror({
+    ScrcpyVideoOptions? options,
+  }) async {
+    startedExternalMirrorCount++;
+    final exitCode = Completer<int>();
+    return ExternalScrcpySession(
+      exitCode: exitCode.future,
+      onStop: () async {
+        stoppedExternalMirrorCount++;
+        if (!exitCode.isCompleted) exitCode.complete(0);
       },
     );
   }

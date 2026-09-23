@@ -13,13 +13,35 @@ void main() {
     );
   });
 
-  test('Windows updater executes its wait and install statements', () {
-    final command = AppUpdateService.windowsInstallerCommand;
+  test('Windows updater waits, installs silently, and removes itself', () {
+    const script = AppUpdateService.windowsUpdaterScript;
 
-    expect(command, startsWith(r'param([int]$appProcessId'));
-    expect(command, contains(r'); while (Get-Process'));
-    expect(command, contains(r'Start-Process -FilePath $installerPath'));
-    expect(command, contains('/LANG=chinesesimplified'));
-    expect(command, isNot(contains(r'$installerPath) {')));
+    expect(script, contains(r'[int]$AppProcessId'));
+    expect(script, contains(r'while (Get-Process -Id $AppProcessId'));
+    expect(script, contains(r'Start-Process -FilePath $InstallerPath'));
+    expect(script, contains('/VERYSILENT'));
+    expect(script, contains('/LANG=chinesesimplified'));
+    expect(script, contains(r'Remove-Item -LiteralPath $PSCommandPath'));
+  });
+
+  test('Windows updater preserves paths with spaces as named arguments', () {
+    final arguments = AppUpdateService.windowsUpdaterArguments(
+      scriptPath: r'C:\Temp\Logbay Updater.ps1',
+      appProcessId: 12345,
+      installerPath: r'C:\Users\Tester\Downloads\Logbay Setup.exe',
+    );
+
+    expect(arguments, containsAllInOrder(['-ExecutionPolicy', 'Bypass']));
+    expect(
+      arguments,
+      containsAllInOrder([
+        '-File',
+        r'C:\Temp\Logbay Updater.ps1',
+        '-AppProcessId',
+        '12345',
+        '-InstallerPath',
+        r'C:\Users\Tester\Downloads\Logbay Setup.exe',
+      ]),
+    );
   });
 }

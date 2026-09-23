@@ -29,6 +29,11 @@ class _AppUpdateChipState extends State<AppUpdateChip> {
       getBinaryUrl: AppUpdateService.getBinaryUrl,
       getDownloadFileLocation: AppUpdateService.getDownloadFileLocation,
       getChangelog: AppUpdateService.getChangelog,
+      // The package default opens the installer interactively as soon as the
+      // download completes. Logbay owns this transition so it can quit first
+      // and run the Inno installer with silent overwrite arguments exactly
+      // once from [_silentInstall].
+      openOnDownload: false,
       updateChipBuilder: _buildChip,
     );
   }
@@ -60,11 +65,7 @@ class _AppUpdateChipState extends State<AppUpdateChip> {
           },
         );
       case UpdatStatus.downloading:
-        return const UpdatePill(
-          busy: true,
-          label: '下载中…',
-          tooltip: '正在下载更新…',
-        );
+        return const UpdatePill(busy: true, label: '下载中…', tooltip: '正在下载更新…');
       case UpdatStatus.readyToInstall:
         final version = latestVersion ?? _pendingInstallVersion;
         if (!_installStarted && version != null) {
@@ -96,9 +97,9 @@ class _AppUpdateChipState extends State<AppUpdateChip> {
       await AppUpdateService.quitAndOpenInstaller(latestVersion);
     } on Object catch (error) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('无法启动安装程序：$error')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('无法启动安装程序：$error')));
     }
   }
 }

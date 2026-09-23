@@ -25,6 +25,7 @@ import '../utils/tools_path.dart';
 import 'tools/adb_tool.dart';
 import 'tools/android_apk_icon_extractor.dart';
 import 'tools/device_tool_runner.dart';
+import 'tools/external_scrcpy_tool.dart';
 import 'tools/idevice_crash_report_tool.dart';
 import 'tools/idevice_info_tool.dart';
 import 'tools/ideviceinstaller_tool.dart';
@@ -51,6 +52,7 @@ class DeviceSessionRepository {
   final IdeviceCrashReportTool _ideviceCrashReportTool;
   final IdeviceInfoTool _ideviceInfoTool;
   final ScrcpyMirror _scrcpyMirror;
+  final ExternalScrcpyTool _externalScrcpyTool;
   final IosMirrorTool _iosMirrorTool;
   final IosScreenshotTool _iosScreenshotTool;
   final AppLogger _logger = AppLogger(source: 'DeviceSessionService');
@@ -86,6 +88,7 @@ class DeviceSessionRepository {
     IdeviceCrashReportTool? ideviceCrashReportTool,
     IdeviceInfoTool? ideviceInfoTool,
     ScrcpyMirror? scrcpyMirror,
+    ExternalScrcpyTool? externalScrcpyTool,
   }) : _adbTool = adbTool ?? AdbTool(executablePath: adbPath),
        _ideviceInstallerTool =
            ideviceInstallerTool ??
@@ -114,6 +117,17 @@ class DeviceSessionRepository {
              onLog: (message) => AppLogger(
                source: 'DeviceSessionService',
              ).info('[scrcpy] $message'),
+           ),
+       _externalScrcpyTool =
+           externalScrcpyTool ??
+           ExternalScrcpyTool(
+             executablePath:
+                 resolveBundledExecutablePath('scrcpy') ?? 'scrcpy.exe',
+             serverPath: () {
+               final tools = resolveBundledToolsDirectory();
+               if (tools == null) return 'scrcpy-server';
+               return '${tools.path}${Platform.pathSeparator}scrcpy-server';
+             }(),
            ),
        _ideviceInfoTool =
            ideviceInfoTool ?? IdeviceInfoTool(executablePath: ideviceInfoPath);
@@ -658,6 +672,21 @@ class DeviceSessionRepository {
       _logger.error('Failed to start screen mirror', detail: error.toString());
       rethrow;
     }
+  }
+
+  /// Opens the official scrcpy desktop client when in-process textures are
+  /// unsafe (for example with Oray/向日葵 virtual display drivers).
+  Future<ExternalScrcpySession> startExternalScreenMirror({
+    ScrcpyVideoOptions? options,
+  }) async {
+    if (device is! AndroidDevice) {
+      throw UnsupportedError('Android 屏幕镜像仅适用于 Android 设备。');
+    }
+    return _externalScrcpyTool.start(
+      _deviceId,
+      options: options ?? const ScrcpyVideoOptions(control: true),
+      onLog: (message) => _sessionLogger.info('[scrcpy-compat] $message'),
+    );
   }
 
   /// iOS 17+ mirror via pymobiledevice3 `display serve-web` (browser HEVC).

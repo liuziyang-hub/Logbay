@@ -56,7 +56,10 @@ class PaneBody extends StatelessWidget {
       ScreenMirrorState.running => (
         icon: Icons.cast_connected_rounded,
         title: '镜像运行中',
-        description: '正在控制 ${device.displayName} 的屏幕。',
+        description: controller.isExternalAndroidMirror
+            ? '检测到虚拟显示驱动，已在独立兼容窗口中打开 '
+                  '${device.displayName}；鼠标和键盘可直接操作。'
+            : '正在控制 ${device.displayName} 的屏幕。',
       ),
       ScreenMirrorState.unsupported => (
         icon: Icons.phonelink_off_rounded,
